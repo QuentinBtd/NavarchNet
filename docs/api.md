@@ -18,4 +18,4 @@ Routes:
 
 The authoritative typed JSON structures live in Rust `domain` and `api`; `cargo run --locked --bin export-types` generates `frontend/src/generated.ts`. CI compares regeneration byte-for-byte and type-checks the UI. This prevents structural type drift, not every semantic contract regression; API/browser tests provide independent behavior checks.
 
-`Fault` scenarios are `none`, `throttle`, `eventual_consistency`, `credential_expiry`, `permission`, `partial_failure`. These simulate provider outcomes; no AWS call or real session expiry is exercised. A probe measurement ingestion route is deliberately not exposed until its authentication/replay/versioning contract is implemented.
+`Fault` scenarios are `none`, `throttle`, `persistent_throttle`, `eventual_consistency`, `credential_expiry`, `permission`, `partial_failure`. These simulate provider outcomes; no AWS call or real session expiry is exercised. A probe measurement ingestion route is deliberately not exposed until its authentication/replay/versioning contract is implemented.

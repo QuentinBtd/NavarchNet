@@ -80,6 +80,21 @@ async fn changed_connection_intent_is_rejected_until_safe_migration_is_supported
         plan.actions.len() as i64,
         "Idempotent reapplication must not duplicate effects"
     );
+    let expanded = setup(&store).await?;
+    let mut initial = expanded.clone();
+    initial.subnet_ids.truncate(1);
+    let initial_plan = store.create_plan("admin", initial).await?;
+    store.apply("admin", &initial_plan.id, Fault::None).await?;
+    finish(&store).await?;
+    assert!(
+        store
+            .create_plan("admin", expanded)
+            .await
+            .unwrap_err()
+            .to_string()
+            .contains("migration"),
+        "Adding a second discovered attachment subnet requires a safe migration, not silent expansion"
+    );
     Ok(())
 }
 
