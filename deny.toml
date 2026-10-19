@@ -1,0 +1,24 @@
+[graph]
+all-features = true
+
+[advisories]
+version = 2
+db-path = ".local/advisory-dbs"
+# Review by 2026-11-19. Runtime only verifies public RSA signatures; private-key
+# generation/signing occurs in local ephemeral tests, never a network service.
+ignore = [{ id = "RUSTSEC-2023-0071", reason = "No runtime RSA decryption or private-key operations; see SECURITY.md. No patched version exists." }]
+
+[licenses]
+confidence-threshold = 0.93
+include-dev = true
+allow = ["Apache-2.0", "MIT", "BSD-2-Clause", "BSD-3-Clause", "ISC", "Unicode-3.0", "Zlib", "CC0-1.0", "OpenSSL", "CDLA-Permissive-2.0"]
+private = { ignore = false }
+
+[bans]
+multiple-versions = "warn"
+wildcards = "deny"
+
+[sources]
+unknown-registry = "deny"
+unknown-git = "deny"
+allow-registry = ["https://github.com/rust-lang/crates.io-index"]
