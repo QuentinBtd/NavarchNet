@@ -2,7 +2,7 @@ use navarchnet::{
     api::*,
     aws::{
         ingress_lookup::*, nat_reference::*, observation::*, route_lookup::*, routing::*,
-        source_handoff::*, target_lookup::*, vpc_lookup::*, *,
+        source_handoff::*, target_lookup::*, vpc_cidr_coverage::*, vpc_lookup::*, *,
     },
     domain::*,
 };
@@ -63,6 +63,12 @@ fn main() {
         VpcRouteTarget,
         VpcLookupResult,
         VpcSubnetLookupResult,
+        VpcCidrCoverageRequest,
+        VpcCidrCoverageResponse,
+        VpcCidrCoverage,
+        VpcDecisionInterval,
+        VpcCoverageTableEvidence,
+        VpcCidrCoverageError,
         TgwSourceRequest,
         TgwSourceResponse,
         SourceHandoffLookup,

@@ -704,6 +704,375 @@ async fn saved_ingress_lookup_uses_reported_association_offline_without_writes()
     Ok(())
 }
 #[tokio::test]
+async fn saved_vpc_cidr_coverage_partitions_existing_point_decisions_without_writes()
+-> anyhow::Result<()> {
+    let (store, _) = support::isolated().await?;
+    let fixture = AwsFixture::default();
+    let role: RoleRegistration = serde_json::from_value(registration())?;
+    let account = store
+        .register_aws_verified("fixture", &role, "123456789012", "fixture")
+        .await?;
+    let mut topology = fixture.discover(&role, &account, "fixture").await?;
+    topology.resources[0].state = Some("available".into());
+    let mut subnet = AwsResource::new(ResourceKind::Subnet, "subnet-coverage".into());
+    subnet.vpc_id = Some(topology.resources[0].id.clone());
+    subnet.owner_account_id = Some(account.aws_account_id.clone());
+    subnet.state = Some("available".into());
+    let mut table = AwsResource::new(ResourceKind::RouteTable, "rtb-coverage".into());
+    table.owner_account_id = Some(account.aws_account_id.clone());
+    table.vpc_id = subnet.vpc_id.clone();
+    table.associations.push(RouteAssociation {
+        id: Some("rtbassoc-coverage".into()),
+        main: true,
+        subnet_id: None,
+        gateway_id: None,
+        state: Some("associated".into()),
+    });
+    let route = |cidr: &str, state: &str, key: &str, id: &str| ObservedRoute {
+        ipv4_destination: Some(cidr.into()),
+        ipv6_destination: None,
+        prefix_list_destination: None,
+        state: Some(state.into()),
+        origin: Some("CreateRoute".into()),
+        targets: [(key.into(), id.into())].into(),
+    };
+    table.routes = vec![
+        route("0.0.0.0/0", "active", "transitGatewayId", "tgw-egress"),
+        route("203.0.113.2/31", "blackhole", "natGatewayId", "nat-deleted"),
+        route(
+            "203.0.113.4/30",
+            "active",
+            "networkInterfaceId",
+            "eni-uninterpreted",
+        ),
+    ];
+    topology.resources.extend([subnet, table.clone()]);
+    let (_, _, generation) = store.begin_aws_discovery("fixture", &account.id).await?;
+    store
+        .finish_aws_discovery("fixture", generation, &topology)
+        .await?;
+    let before = serde_json::to_value(store.aws_topology(&account.id).await?)?;
+    let audit_before: i64 = sqlx::query_scalar("SELECT count(*) FROM audit")
+        .fetch_one(&store.pool)
+        .await?;
+    let reader = "r".repeat(32);
+    let app = api::router(AppState {
+        store: store.clone(),
+        auth: Arc::new(Auth::demo("a".repeat(32), reader.clone())?),
+        aws: None,
+    });
+    let path = format!(
+        "/aws/accounts/{}/vpc-cidr-coverage?subnet_id=subnet-coverage&destination_cidr=203.0.113.0/29",
+        account.id
+    );
+    let (status, body) = request(&app, "GET", &path, Some(&reader), None).await?;
+    assert_eq!(
+        status,
+        StatusCode::OK,
+        "A saved destination CIDR needs its own exact reader partition, not sampled point queries"
+    );
+    assert_eq!(
+        request(&app, "GET", &path, None, None).await?.0,
+        StatusCode::UNAUTHORIZED
+    );
+    assert_eq!(body["account_id"], account.id);
+    assert_eq!(body["topology_id"], topology.id);
+    assert_eq!(body["completed_at"], topology.completed_at);
+    assert_eq!(body["aws_account_id"], account.aws_account_id);
+    assert_eq!(body["region"], topology.region);
+    assert_eq!(body["subnet_id"], "subnet-coverage");
+    assert_eq!(body["destination_cidr"], "203.0.113.0/29");
+    assert_eq!(
+        body["limitations"],
+        serde_json::to_value(&topology.limitations)?
+    );
+    assert_eq!(
+        body["request_ids"],
+        serde_json::to_value(&topology.request_ids)?
+    );
+    assert_eq!(body["complete_for_supported_queries"], true);
+    assert_eq!(body["reference_only"], true);
+    assert_eq!(body["execution_enabled"], false);
+    assert_eq!(body["connectivity_tested"], false);
+    for invalid in [
+        format!("{path}&unknown=true"),
+        format!("{path}&subnet_id=subnet-coverage"),
+        format!("{path}&destination_cidr=203.0.113.0/29"),
+        path.replace("subnet_id=subnet-coverage&", ""),
+        path.replace("&destination_cidr=203.0.113.0/29", ""),
+    ] {
+        assert_eq!(
+            request(&app, "GET", &invalid, Some(&reader), None).await?.0,
+            StatusCode::BAD_REQUEST
+        );
+    }
+    for invalid in [
+        "203.0.113.1/29",
+        "203.0.113.0",
+        "203.0.113.0/029",
+        "%20203.0.113.0/29",
+        "2001:0DB8::/32",
+        "::/129",
+    ] {
+        let (code, error) = request(
+            &app,
+            "GET",
+            &path.replace("203.0.113.0/29", invalid),
+            Some(&reader),
+            None,
+        )
+        .await?;
+        assert_eq!(code, StatusCode::UNPROCESSABLE_ENTITY);
+        assert_eq!(error["error"], "invalid_destination_cidr");
+        assert!(error.get("coverage").is_none());
+    }
+    for invalid in ["", "bad%0Asubnet"] {
+        let (code, error) = request(
+            &app,
+            "GET",
+            &path.replace("subnet-coverage", invalid),
+            Some(&reader),
+            None,
+        )
+        .await?;
+        assert_eq!(code, StatusCode::UNPROCESSABLE_ENTITY);
+        assert_eq!(error["error"], "invalid_subnet_input");
+    }
+    for oversized in [
+        path.replace("subnet-coverage", &"x".repeat(2049)),
+        path.replace("203.0.113.0/29", &"x".repeat(65)),
+    ] {
+        let (code, error) = request(&app, "GET", &oversized, Some(&reader), None).await?;
+        assert_eq!(code, StatusCode::PAYLOAD_TOO_LARGE);
+        assert_eq!(error["error"], "input_too_large");
+        assert!(error.get("segments").is_none());
+    }
+    assert_eq!(
+        request(
+            &app,
+            "GET",
+            &path.replace(&account.id, "missing"),
+            Some(&reader),
+            None
+        )
+        .await?
+        .0,
+        StatusCode::CONFLICT
+    );
+    let coverage = &body["coverage"];
+    assert_eq!(coverage["partition_complete"], true);
+    assert_eq!(
+        coverage["table_evidence"]["original_table"],
+        serde_json::to_value(&table)?
+    );
+    assert_eq!(coverage["table_evidence"]["source"], "implicit_main");
+    let segments = coverage["segments"].as_array().unwrap();
+    assert_eq!(segments.len(), 3);
+    for (segment, (first, last, decision)) in segments.iter().zip([
+        ("203.0.113.0", "203.0.113.1", "reported_route"),
+        ("203.0.113.2", "203.0.113.3", "reported_blackhole"),
+        ("203.0.113.4", "203.0.113.7", "unresolved"),
+    ]) {
+        assert_eq!(segment["start"], first);
+        assert_eq!(segment["end_inclusive"], last);
+        assert_eq!(segment["result"]["lookup"]["status"], decision);
+    }
+    assert_eq!(
+        segments[2]["result"]["lookup"]["reason"],
+        "unsupported_target"
+    );
+    // Exhaustive oracle only for this tiny test range; production must never enumerate addresses.
+    for host in 0..8 {
+        let ip = format!("203.0.113.{host}");
+        let ordinal = u32::from(ip.parse::<std::net::Ipv4Addr>()?);
+        let matches: Vec<_> = segments
+            .iter()
+            .filter(|cell| {
+                let start = u32::from(
+                    cell["start"]
+                        .as_str()
+                        .unwrap()
+                        .parse::<std::net::Ipv4Addr>()
+                        .unwrap(),
+                );
+                let end = u32::from(
+                    cell["end_inclusive"]
+                        .as_str()
+                        .unwrap()
+                        .parse::<std::net::Ipv4Addr>()
+                        .unwrap(),
+                );
+                start <= ordinal && ordinal <= end
+            })
+            .collect();
+        assert_eq!(matches.len(), 1);
+        let (_, point) = request(
+            &app,
+            "GET",
+            &format!(
+                "/aws/accounts/{}/vpc-route-lookup?subnet_id=subnet-coverage&destination={ip}",
+                account.id
+            ),
+            Some(&reader),
+            None,
+        )
+        .await?;
+        assert_eq!(matches[0]["result"], point["result"]);
+        assert_eq!(
+            point["result"],
+            serde_json::to_value(vpc_lookup::lookup(&topology, "subnet-coverage", &ip))?
+        );
+    }
+    assert_eq!(
+        before,
+        serde_json::to_value(store.aws_topology(&account.id).await?)?
+    );
+    assert_eq!(
+        audit_before,
+        sqlx::query_scalar::<_, i64>("SELECT count(*) FROM audit")
+            .fetch_one(&store.pool)
+            .await?
+    );
+    assert!(
+        store.plans().await?.is_empty()
+            && store.inventories().await?.is_empty()
+            && store.operations().await?.is_empty()
+    );
+    assert_eq!(fixture.discoveries.load(Ordering::SeqCst), 1);
+    assert_eq!(fixture.verifications.load(Ordering::SeqCst), 0);
+    // Explicit fixture generations only; each coverage GET must remain an offline read.
+    let mut ipv6 = topology.clone();
+    ipv6.id = uuid::Uuid::new_v4().to_string();
+    ipv6.completed_at = "3".into();
+    ipv6.resources[0].cidrs.push("2001:db8::/56".into());
+    let selected = ipv6
+        .resources
+        .iter_mut()
+        .find(|row| row.id == "rtb-coverage")
+        .unwrap();
+    selected.routes = vec![ObservedRoute {
+        ipv4_destination: None,
+        ipv6_destination: Some("::/0".into()),
+        prefix_list_destination: None,
+        state: Some("active".into()),
+        origin: Some("CreateRoute".into()),
+        targets: [("transitGatewayId".into(), "tgw-egress".into())].into(),
+    }];
+    let (_, _, generation) = store.begin_aws_discovery("fixture", &account.id).await?;
+    store
+        .finish_aws_discovery("fixture", generation, &ipv6)
+        .await?;
+    let ipv6_before = serde_json::to_value(store.aws_topology(&account.id).await?)?;
+    let audit_ipv6: i64 = sqlx::query_scalar("SELECT count(*) FROM audit")
+        .fetch_one(&store.pool)
+        .await?;
+    let (code, response) = request(
+        &app,
+        "GET",
+        &path.replace("203.0.113.0/29", "::/0"),
+        Some(&reader),
+        None,
+    )
+    .await?;
+    assert_eq!(code, StatusCode::OK);
+    assert_eq!(response["topology_id"], ipv6.id);
+    let cells = response["coverage"]["segments"].as_array().unwrap();
+    assert_eq!(cells.len(), 3);
+    let service: ipnet::IpNet = "fd00:ec2::/32".parse()?;
+    assert_eq!(cells[0]["start"], "::");
+    assert_eq!(
+        cells[2]["end_inclusive"],
+        "ffff:ffff:ffff:ffff:ffff:ffff:ffff:ffff"
+    );
+    assert_eq!(cells[1]["start"], service.network().to_string());
+    assert_eq!(cells[1]["end_inclusive"], service.broadcast().to_string());
+    assert_eq!(
+        cells[1]["result"]["lookup"]["reason"],
+        "reserved_service_destination"
+    );
+    assert_eq!(
+        ipv6_before,
+        serde_json::to_value(store.aws_topology(&account.id).await?)?
+    );
+    assert_eq!(
+        audit_ipv6,
+        sqlx::query_scalar::<_, i64>("SELECT count(*) FROM audit")
+            .fetch_one(&store.pool)
+            .await?
+    );
+    for dimension in ["route_rows", "table_output", "provenance_output"] {
+        let mut large = ipv6.clone();
+        large.id = uuid::Uuid::new_v4().to_string();
+        large.completed_at = "4".into();
+        let limit = vpc_cidr_coverage::CoverageBudget::default().response_bytes;
+        match dimension {
+            "route_rows" => {
+                let selected = large
+                    .resources
+                    .iter_mut()
+                    .find(|row| row.id == "rtb-coverage")
+                    .unwrap();
+                selected.routes.resize(1025, selected.routes[0].clone());
+            }
+            "table_output" => {
+                large
+                    .resources
+                    .iter_mut()
+                    .find(|row| row.id == "rtb-coverage")
+                    .unwrap()
+                    .tags
+                    .insert("fixture".into(), "x".repeat(limit));
+            }
+            "provenance_output" => large.limitations.push("x".repeat(limit)),
+            _ => unreachable!(),
+        }
+        let (_, _, generation) = store.begin_aws_discovery("fixture", &account.id).await?;
+        store
+            .finish_aws_discovery("fixture", generation, &large)
+            .await?;
+        let saved_before = serde_json::to_value(store.aws_topology(&account.id).await?)?;
+        let audit_large: i64 = sqlx::query_scalar("SELECT count(*) FROM audit")
+            .fetch_one(&store.pool)
+            .await?;
+        let (code, error) = request(
+            &app,
+            "GET",
+            &path.replace("203.0.113.0/29", "::/0"),
+            Some(&reader),
+            None,
+        )
+        .await?;
+        assert_eq!(code, StatusCode::PAYLOAD_TOO_LARGE);
+        assert_eq!(error["error"], "budget_exceeded");
+        assert_eq!(
+            error["dimension"],
+            if dimension == "route_rows" {
+                "route_rows"
+            } else {
+                "response_bytes"
+            }
+        );
+        assert!(
+            error.get("coverage").is_none()
+                && error.get("segments").is_none()
+                && error.get("partition_complete").is_none()
+        );
+        assert_eq!(
+            saved_before,
+            serde_json::to_value(store.aws_topology(&account.id).await?)?
+        );
+        assert_eq!(
+            audit_large,
+            sqlx::query_scalar::<_, i64>("SELECT count(*) FROM audit")
+                .fetch_one(&store.pool)
+                .await?
+        );
+    }
+    assert_eq!(fixture.discoveries.load(Ordering::SeqCst), 1);
+    assert_eq!(fixture.verifications.load(Ordering::SeqCst), 0);
+    Ok(())
+}
+#[tokio::test]
 async fn saved_vpc_lookup_reads_selected_subnet_routes_offline_without_writes() -> anyhow::Result<()>
 {
     let (store, _) = support::isolated().await?;

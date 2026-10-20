@@ -104,6 +104,29 @@ pub struct VpcLookupResponse {
     pub execution_enabled: bool,
     pub connectivity_tested: bool,
 }
+#[derive(Deserialize, TS)]
+#[serde(deny_unknown_fields)]
+pub struct VpcCidrCoverageRequest {
+    pub subnet_id: String,
+    pub destination_cidr: String,
+}
+#[derive(Serialize, TS)]
+pub struct VpcCidrCoverageResponse {
+    pub account_id: String,
+    pub topology_id: String,
+    pub completed_at: String,
+    pub aws_account_id: String,
+    pub region: String,
+    pub subnet_id: String,
+    pub destination_cidr: String,
+    pub complete_for_supported_queries: bool,
+    pub limitations: Vec<String>,
+    pub request_ids: Vec<String>,
+    pub coverage: aws::vpc_cidr_coverage::VpcCidrCoverage,
+    pub reference_only: bool,
+    pub execution_enabled: bool,
+    pub connectivity_tested: bool,
+}
 #[derive(Serialize, TS)]
 pub struct NatReferenceResponse {
     pub account_id: String,
@@ -192,6 +215,10 @@ pub fn router(state: AppState) -> Router {
         )
         .route("/aws/accounts/{id}/adoptions", post(adopt_aws))
         .route("/aws/accounts/{id}/vpc-route-lookup", get(lookup_aws_vpc))
+        .route(
+            "/aws/accounts/{id}/vpc-cidr-coverage",
+            get(coverage_aws_vpc),
+        )
         .route(
             "/aws/accounts/{id}/nat-reference-lookup",
             get(lookup_aws_nat_reference),
@@ -341,6 +368,69 @@ async fn lookup_aws_vpc(
         execution_enabled: false,
         connectivity_tested: false,
     }))
+}
+enum CoverageFailure {
+    Coverage(aws::vpc_cidr_coverage::VpcCidrCoverageError),
+    Store(anyhow::Error),
+}
+impl IntoResponse for CoverageFailure {
+    fn into_response(self) -> Response {
+        match self {
+            Self::Store(error) => Failure(error).into_response(),
+            Self::Coverage(error) => {
+                use aws::vpc_cidr_coverage::VpcCidrCoverageError::*;
+                let status = match &error {
+                    InvalidDestinationCidr | InvalidSubnetInput => StatusCode::UNPROCESSABLE_ENTITY,
+                    InputTooLarge { .. } | BudgetExceeded { .. } => StatusCode::PAYLOAD_TOO_LARGE,
+                    PartitionProofUnavailable => StatusCode::CONFLICT,
+                };
+                (status, Json(error)).into_response()
+            }
+        }
+    }
+}
+async fn coverage_aws_vpc(
+    State(s): State<AppState>,
+    Path(id): Path<String>,
+    Query(query): Query<VpcCidrCoverageRequest>,
+) -> Result<Json<VpcCidrCoverageResponse>, CoverageFailure> {
+    use aws::vpc_cidr_coverage::{self, CoverageBudget, VpcCidrCoverageError};
+    vpc_cidr_coverage::validate_query(&query.subnet_id, &query.destination_cidr)
+        .map_err(CoverageFailure::Coverage)?;
+    let topology = s
+        .store
+        .aws_topology(&id)
+        .await
+        .map_err(CoverageFailure::Store)?
+        .topology;
+    if topology.account_id != id || topology.execution_enabled || topology.connectivity_tested {
+        return Err(CoverageFailure::Coverage(
+            VpcCidrCoverageError::PartitionProofUnavailable,
+        ));
+    }
+    let budget = CoverageBudget::default();
+    let coverage =
+        vpc_cidr_coverage::analyze(&topology, &query.subnet_id, &query.destination_cidr, budget)
+            .map_err(CoverageFailure::Coverage)?;
+    let response = VpcCidrCoverageResponse {
+        account_id: id,
+        topology_id: topology.id,
+        completed_at: topology.completed_at,
+        aws_account_id: topology.aws_account_id,
+        region: topology.region,
+        subnet_id: query.subnet_id,
+        destination_cidr: query.destination_cidr,
+        complete_for_supported_queries: topology.complete_for_supported_queries,
+        limitations: topology.limitations,
+        request_ids: topology.request_ids,
+        coverage,
+        reference_only: true,
+        execution_enabled: false,
+        connectivity_tested: false,
+    };
+    vpc_cidr_coverage::check_serialized(&response, budget.response_bytes)
+        .map_err(CoverageFailure::Coverage)?;
+    Ok(Json(response))
 }
 async fn lookup_aws_nat_reference(
     State(s): State<AppState>,

@@ -1,6 +1,6 @@
 //! Lookup reported subnet-table entries, not a full packet path or measured connectivity.
 use super::{
-    observation::{AwsResource, AwsTopology, ResourceKind},
+    observation::{AwsResource, AwsTopology, ObservedRoute, ResourceKind},
     routing::{self, AssociationSource, RouteSelectionReason, RouteTableSelection},
 };
 use serde::{Deserialize, Serialize};
@@ -113,18 +113,39 @@ pub fn lookup(topology: &AwsTopology, subnet_id: &str, destination: &str) -> Vpc
         }
     }
 }
-fn lookup_routes(table: &AwsResource, destination: &str) -> VpcLookupResult {
+// Coverage and point interpretation share every destination-sensitive predicate. If another such
+// predicate is introduced, its complete transition boundaries must join the coverage proof too.
+pub(super) fn reserved_service_networks() -> [ipnet::IpNet; 2] {
+    ["169.254.168.0/22", "fd00:ec2::/32"].map(|cidr| cidr.parse().expect("constant reserved CIDR"))
+}
+pub(super) fn destination_network(row: &ObservedRoute) -> Result<ipnet::IpNet, VpcLookupReason> {
+    let (cidr, ipv4) = match (
+        row.ipv4_destination.as_deref(),
+        row.ipv6_destination.as_deref(),
+    ) {
+        (Some(cidr), None) => (cidr, true),
+        (None, Some(cidr)) => (cidr, false),
+        _ => return Err(VpcLookupReason::MalformedRoute),
+    };
+    let network = cidr
+        .parse::<ipnet::IpNet>()
+        .map_err(|_| VpcLookupReason::MalformedRoute)?;
+    if network.addr().is_ipv4() != ipv4 || network.addr() != network.network() {
+        return Err(VpcLookupReason::MalformedRoute);
+    }
+    Ok(network)
+}
+pub(super) fn lookup_routes(table: &AwsResource, destination: &str) -> VpcLookupResult {
     let evaluate = || -> Result<VpcLookupResult, VpcLookupReason> {
         use VpcLookupReason::*;
         let address = destination
             .parse::<std::net::IpAddr>()
             .map_err(|_| InvalidDestination)?;
         // AWS service destinations are not forwarded by an overlapping broader route.
-        if ["169.254.168.0/22", "fd00:ec2::/32"].iter().any(|cidr| {
-            cidr.parse::<ipnet::IpNet>()
-                .expect("constant reserved CIDR")
-                .contains(&address)
-        }) {
+        if reserved_service_networks()
+            .iter()
+            .any(|network| network.contains(&address))
+        {
             return Err(ReservedServiceDestination);
         }
         // Unexpanded members or malformed rows may hide a more-specific match.
@@ -137,18 +158,7 @@ fn lookup_routes(table: &AwsResource, destination: &str) -> VpcLookupResult {
         }
         let mut candidates = Vec::new();
         for row in &table.routes {
-            let (cidr, ipv4) = match (
-                row.ipv4_destination.as_deref(),
-                row.ipv6_destination.as_deref(),
-            ) {
-                (Some(cidr), None) => (cidr, true),
-                (None, Some(cidr)) => (cidr, false),
-                _ => return Err(MalformedRoute),
-            };
-            let network = cidr.parse::<ipnet::IpNet>().map_err(|_| MalformedRoute)?;
-            if network.addr().is_ipv4() != ipv4 || network.addr() != network.network() {
-                return Err(MalformedRoute);
-            }
+            let network = destination_network(row)?;
             if network.contains(&address) {
                 candidates.push((network.prefix_len(), row));
             }

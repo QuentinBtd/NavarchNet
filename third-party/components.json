@@ -3233,11 +3233,11 @@
   {
     "ecosystem": "rust",
     "name": "rustls-webpki",
-    "version": "0.103.15",
+    "version": "0.103.16",
     "license": "ISC",
     "source": "registry+https://github.com/rust-lang/crates.io-index",
     "notices": [
-      "rust/rustls-webpki-0.103.15/LICENSE"
+      "rust/rustls-webpki-0.103.16/LICENSE"
     ]
   },
   {
@@ -4364,21 +4364,21 @@
   {
     "ecosystem": "rust",
     "name": "webpki-root-certs",
-    "version": "1.0.9",
+    "version": "1.0.10",
     "license": "CDLA-Permissive-2.0",
     "source": "registry+https://github.com/rust-lang/crates.io-index",
     "notices": [
-      "rust/webpki-root-certs-1.0.9/LICENSE"
+      "rust/webpki-root-certs-1.0.10/LICENSE"
     ]
   },
   {
     "ecosystem": "rust",
     "name": "webpki-roots",
-    "version": "1.0.9",
+    "version": "1.0.10",
     "license": "CDLA-Permissive-2.0",
     "source": "registry+https://github.com/rust-lang/crates.io-index",
     "notices": [
-      "rust/webpki-roots-1.0.9/LICENSE"
+      "rust/webpki-roots-1.0.10/LICENSE"
     ]
   },
   {
