@@ -47,6 +47,175 @@ function fixture(): TopologyView {
   };
 }
 describe("read-only AWS observations", () => {
+  it("lazily shows every literal NAT tuple without choosing a primary or successful egress", () => {
+    const view = fixture();
+    const resource = view.topology.resources[0];
+    if (!resource) throw new Error("Missing fixture");
+    resource.kind = "nat_gateway";
+    resource.nat_gateway = {
+      route_table_id: "nat-<img src=x>",
+      addresses: ["succeeded", "failed", "future-status"].map((status, index) => ({
+        allocation_id: "eipalloc-a",
+        association_id: null,
+        network_interface_id: null,
+        public_ip: `203.0.113.${index + 1}`,
+        private_ip: null,
+        az_id: index === 2 ? null : `euw1-az${index + 1}`,
+        az_name: "eu-west-1a",
+        is_primary: index === 2 ? null : index === 0,
+        status,
+      })),
+    };
+    const before = JSON.stringify(view);
+    const node = renderAwsTopology(view, { canConsent: false, onConsent: async () => {} });
+    const detail = node.querySelector<HTMLDetailsElement>("details[data-nat-metadata]");
+    if (!detail) throw new Error("Missing NAT metadata detail");
+    expect(detail.querySelectorAll("[data-nat-address]")).toHaveLength(0);
+    detail.open = true;
+    detail.dispatchEvent(new Event("toggle"));
+    detail.dispatchEvent(new Event("toggle"));
+    expect(detail.querySelectorAll("[data-nat-address]")).toHaveLength(3);
+    for (const value of [
+      "succeeded",
+      "failed",
+      "future-status",
+      "Reported primary: true",
+      "Reported primary: false",
+      "Reported primary: not reported",
+      "AZ ID: not reported",
+      "nat-<img src=x>",
+      "Unvalidated routeTableId reference",
+      "not selected egress IPs",
+      "not NAT health or a selected traffic AZ",
+      "snapshot",
+      "2",
+    ])
+      expect(detail.textContent).toContain(value);
+    expect(detail.querySelector("img, a, form, input, select")).toBeNull();
+    expect(JSON.stringify(view)).toBe(before);
+  });
+  it("distinguishes legacy, omitted and explicit empty NAT metadata without inferring a mode", () => {
+    const cases: [AwsResource["nat_gateway"], string][] = [
+      [null, "NAT details not captured in this observation"],
+      [{ route_table_id: null, addresses: null }, "Address collection not reported"],
+      [{ route_table_id: null, addresses: [] }, "Reported address tuples: 0"],
+    ];
+    for (const [metadata, expected] of cases) {
+      const view = fixture();
+      const resource = view.topology.resources[0];
+      if (!resource) throw new Error("Missing fixture");
+      resource.kind = "nat_gateway";
+      resource.nat_gateway = metadata;
+      const node = renderAwsTopology(view, { canConsent: false, onConsent: async () => {} });
+      const detail = node.querySelector<HTMLDetailsElement>("details[data-nat-metadata]");
+      if (!detail) throw new Error("Missing NAT metadata detail");
+      detail.open = true;
+      detail.dispatchEvent(new Event("toggle"));
+      expect(detail.textContent).toContain(expected);
+      expect(detail.textContent).toContain("Availability mode: not reported");
+      expect(detail.querySelectorAll("[data-nat-address]")).toHaveLength(0);
+    }
+  });
+  it("rejects malformed NAT metadata before showing a valid subset or invalid primary marker", () => {
+    const address = {
+      allocation_id: null,
+      association_id: null,
+      network_interface_id: null,
+      public_ip: "203.0.113.1",
+      private_ip: null,
+      az_id: "euw1-az1",
+      az_name: null,
+      is_primary: null,
+      status: "succeeded",
+    };
+    for (const metadata of [
+      {},
+      { route_table_id: [], addresses: [] },
+      { route_table_id: null, addresses: {} },
+      { route_table_id: null, addresses: [address, null] },
+      { route_table_id: null, addresses: [address, { ...address, is_primary: "false" }] },
+      { route_table_id: null, addresses: [address, { ...address, status: 1 }] },
+    ]) {
+      const view = fixture();
+      const resource = view.topology.resources[0];
+      if (!resource) throw new Error("Missing fixture");
+      resource.kind = "nat_gateway";
+      resource.nat_gateway = metadata as unknown as AwsResource["nat_gateway"];
+      const node = renderAwsTopology(view, { canConsent: false, onConsent: async () => {} });
+      const detail = node.querySelector<HTMLDetailsElement>("details[data-nat-metadata]");
+      if (!detail) throw new Error("Missing NAT metadata detail");
+      detail.open = true;
+      detail.dispatchEvent(new Event("toggle"));
+      expect(detail.textContent).toContain("NAT metadata is malformed; no address tuples displayed");
+      expect(detail.querySelectorAll("[data-nat-address]")).toHaveLength(0);
+    }
+  });
+  it("bounds lazy NAT DOM batches without silently truncating the reported collection", () => {
+    const view = fixture();
+    const resource = view.topology.resources[0];
+    if (!resource) throw new Error("Missing fixture");
+    resource.kind = "nat_gateway";
+    resource.nat_gateway = {
+      route_table_id: null,
+      addresses: Array.from({ length: 101 }, (_, index) => ({
+        allocation_id: null,
+        association_id: null,
+        network_interface_id: null,
+        public_ip: `203.0.113.${index}`,
+        private_ip: null,
+        az_name: null,
+        az_id: null,
+        is_primary: null,
+        status: "future-status",
+      })),
+    };
+    const node = renderAwsTopology(view, { canConsent: false, onConsent: async () => {} });
+    const detail = node.querySelector<HTMLDetailsElement>("details[data-nat-metadata]");
+    if (!detail) throw new Error("Missing NAT metadata detail");
+    expect(detail.querySelectorAll("[data-nat-address]")).toHaveLength(0);
+    detail.open = true;
+    detail.dispatchEvent(new Event("toggle"));
+    expect(detail.querySelectorAll("[data-nat-address]")).toHaveLength(50);
+    expect(detail.textContent).toContain("Showing 50 of 101 reported address tuples");
+    const more = detail.querySelector<HTMLButtonElement>("button[data-nat-more]");
+    if (!more) throw new Error("Missing address continuation button");
+    expect(more.type).toBe("button");
+    more.click();
+    expect(detail.querySelectorAll("[data-nat-address]")).toHaveLength(100);
+    more.click();
+    more.click();
+    expect(detail.querySelectorAll("[data-nat-address]")).toHaveLength(101);
+    expect(detail.textContent).toContain("203.0.113.100");
+    expect(detail.textContent).toContain("Showing 101 of 101 reported address tuples");
+    expect(more.hidden).toBe(true);
+  });
+  it("does not display NAT details under missing or non-false offline markers or absent snapshot identity", () => {
+    for (const change of [
+      { execution_enabled: true },
+      { execution_enabled: undefined },
+      { execution_enabled: null },
+      { connectivity_tested: true },
+      { connectivity_tested: undefined },
+      { id: "" },
+      { completed_at: "" },
+    ]) {
+      const view = fixture();
+      Object.assign(view.topology, change);
+      const resource = view.topology.resources[0];
+      if (!resource) throw new Error("Missing fixture");
+      resource.kind = "nat_gateway";
+      resource.nat_gateway = { route_table_id: "rtb-must-not-display", addresses: [] };
+      const node = renderAwsTopology(view, { canConsent: false, onConsent: async () => {} });
+      const detail = node.querySelector<HTMLDetailsElement>("details[data-nat-metadata]");
+      if (!detail) throw new Error("Missing NAT metadata detail");
+      detail.open = true;
+      detail.dispatchEvent(new Event("toggle"));
+      expect(detail.textContent).toContain(
+        "Offline snapshot identity or markers are invalid; refresh the observation",
+      );
+      expect(detail.textContent).not.toContain("rtb-must-not-display");
+    }
+  });
   it("offers saved-table lookup to a reader and displays only a matching immutable snapshot response", async () => {
     const view = fixture();
     const row = view.topology.resources[0];

@@ -283,7 +283,72 @@ async fn main() -> anyhow::Result<()> {
             nat.state = Some("available".into());
             nat.availability_mode = Some("regional".into());
             nat.connectivity_type = Some("public".into());
-            resources.extend([target_subnet, egress, nat]);
+            nat.public_ips = vec![
+                "203.0.113.10".into(),
+                "203.0.113.20".into(),
+                "203.0.113.30".into(),
+            ];
+            nat.nat_gateway = Some(NatGatewayMetadata {
+                route_table_id: Some("nat-literal-unvalidated-table-reference".into()),
+                addresses: Some(vec![
+                    NatGatewayAddress {
+                        allocation_id: Some("eipalloc-browser-a".into()),
+                        association_id: Some("eipassoc-browser-a".into()),
+                        network_interface_id: Some("eni-browser-a".into()),
+                        public_ip: Some("203.0.113.10".into()),
+                        private_ip: Some("10.1.50.10".into()),
+                        az_name: Some("eu-west-1a".into()),
+                        az_id: Some("euw1-az1".into()),
+                        is_primary: Some(true),
+                        status: Some("succeeded".into()),
+                    },
+                    NatGatewayAddress {
+                        allocation_id: None,
+                        association_id: None,
+                        network_interface_id: None,
+                        public_ip: Some("203.0.113.20".into()),
+                        private_ip: None,
+                        az_name: None,
+                        az_id: Some("euw1-az2".into()),
+                        is_primary: Some(false),
+                        status: Some("failed".into()),
+                    },
+                    NatGatewayAddress {
+                        allocation_id: None,
+                        association_id: None,
+                        network_interface_id: None,
+                        public_ip: Some("203.0.113.30".into()),
+                        private_ip: None,
+                        az_name: Some("eu-west-1c".into()),
+                        az_id: None,
+                        is_primary: None,
+                        status: Some("future-<img src=x>".into()),
+                    },
+                ]),
+            });
+            let mut legacy_nat =
+                AwsResource::new(ResourceKind::NatGateway, "nat-browser-legacy".into());
+            legacy_nat.state = Some("available".into());
+            let mut unreported_nat = legacy_nat.clone();
+            unreported_nat.id = "nat-browser-unreported".into();
+            unreported_nat.nat_gateway = Some(NatGatewayMetadata {
+                route_table_id: None,
+                addresses: None,
+            });
+            let mut empty_nat = legacy_nat.clone();
+            empty_nat.id = "nat-browser-empty".into();
+            empty_nat.nat_gateway = Some(NatGatewayMetadata {
+                route_table_id: None,
+                addresses: Some(vec![]),
+            });
+            resources.extend([
+                target_subnet,
+                egress,
+                nat,
+                legacy_nat,
+                unreported_nat,
+                empty_nat,
+            ]);
             let mut ingress = AwsResource::new(
                 ResourceKind::VpcAttachment,
                 "tgw-attach-browser-source".into(),

@@ -1,4 +1,5 @@
 import type { AdoptionConsent, TopologyView, VerifiedAccount } from "./generated";
+import { renderNatMetadata } from "./nat-metadata-view";
 import {
   renderSourceHandoff,
   type SavedNetworkTargetLookup,
@@ -102,6 +103,7 @@ export function renderAwsTopology(
         }
         if (resource.public_ips.length)
           row.append(text("p", `Reported public IPs: ${resource.public_ips.join(", ")}`));
+        if (resource.kind === "nat_gateway") row.append(renderNatMetadata(resource, topology));
         if (resource.availability_mode)
           row.append(
             text(
