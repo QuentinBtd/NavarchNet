@@ -4,6 +4,7 @@
 use crate::store::Store;
 use anyhow::{Context, ensure};
 use sqlx::{Row, postgres::PgRow};
+use std::future::Future;
 
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct ExternalEffectIntent {
@@ -54,6 +55,23 @@ pub struct ObservedExternalEffect {
     pub desired_sha256: String,
     pub external_id: String,
 }
+/// Complete coverage is a trusted reader assertion, not a user/API field or cloud proof.
+/// Readers must retain every candidate and report incomplete pagination/timeouts as such.
+pub struct ExternalEffectObservation {
+    pub complete: bool,
+    pub candidates: Vec<ObservedExternalEffect>,
+}
+#[derive(Debug, PartialEq, Eq)]
+pub enum RecoveryOutcome {
+    NotDispatched,
+    AlreadyConfirmed { external_id: String },
+    NotClaimed,
+    ObservationIncomplete,
+    NotObserved,
+    AmbiguousObservation,
+    ObservationMismatch,
+    Confirmed { external_id: String },
+}
 fn text(value: &str) -> bool {
     !value.trim().is_empty() && value.len() <= 2048 && !value.chars().any(char::is_control)
 }
@@ -69,6 +87,65 @@ fn intent(row: PgRow) -> anyhow::Result<ExternalEffectIntent> {
     })
 }
 impl Store {
+    /// One observe-only recovery attempt, with no dispatch callback or AWS/HTTP admission.
+    /// Missing/incomplete/ambiguous evidence leaves dispatch uncertain; it never authorizes retry.
+    /// The callback must independently read the exact intent's external scope. Token/hash equality
+    /// alone does not prove real-provider identity, ownership, freshness or exactly-once execution.
+    pub async fn recover_external_effect<F, Fut>(
+        &self,
+        id: &str,
+        lease_seconds: u32,
+        observe: F,
+    ) -> anyhow::Result<RecoveryOutcome>
+    where
+        F: FnOnce(ExternalEffectIntent) -> Fut,
+        Fut: Future<Output = anyhow::Result<ExternalEffectObservation>>,
+    {
+        ensure!(
+            (1..=300).contains(&lease_seconds),
+            "External effect lease must be 1–300 seconds"
+        );
+        let saved = self.external_effect(id).await?;
+        match saved.state.as_str() {
+            "prepared" => return Ok(RecoveryOutcome::NotDispatched),
+            "confirmed" => {
+                return Ok(RecoveryOutcome::AlreadyConfirmed {
+                    external_id: saved
+                        .external_id
+                        .context("Confirmed intent lacks external identity")?,
+                });
+            }
+            "dispatched" => {}
+            _ => anyhow::bail!("Unsupported external journal state"),
+        }
+        let Some(claim) = self.claim_external_effect(id, lease_seconds).await? else {
+            // Includes a concurrent confirmation after the earlier read; refresh to distinguish.
+            return Ok(RecoveryOutcome::NotClaimed);
+        };
+        ensure!(
+            claim.directive() == EffectDirective::ObserveOnly,
+            "Recovery is observe-only"
+        );
+        let mut observation = observe(saved.clone()).await?;
+        if !observation.complete {
+            return Ok(RecoveryOutcome::ObservationIncomplete);
+        }
+        let Some(candidate) = observation.candidates.pop() else {
+            return Ok(RecoveryOutcome::NotObserved);
+        };
+        if !observation.candidates.is_empty() {
+            return Ok(RecoveryOutcome::AmbiguousObservation);
+        }
+        if candidate.client_token != saved.client_token
+            || candidate.desired_sha256 != saved.desired_sha256
+        {
+            return Ok(RecoveryOutcome::ObservationMismatch);
+        }
+        self.confirm_external_effect(&claim, &candidate).await?;
+        Ok(RecoveryOutcome::Confirmed {
+            external_id: candidate.external_id,
+        })
+    }
     /// Reserves one immutable action per scope. Replacement/deletion is deliberately unsupported,
     /// even after confirmation: an unresolved old request must never race a different desired action.
     pub async fn prepare_external_effect(

@@ -1,9 +1,82 @@
 //! Real PostgreSQL journal and isolated replay effects; no cloud provider is constructed.
 mod support;
 use navarchnet::{
-    external_effects::{EffectDirective, ObservedExternalEffect},
+    external_effects::{
+        EffectDirective, ExternalEffectObservation, ObservedExternalEffect, RecoveryOutcome,
+    },
     store::Store,
 };
+
+#[tokio::test]
+async fn recovery_driver_confirms_only_a_complete_unique_matching_replay_observation()
+-> anyhow::Result<()> {
+    let (store, _) = support::isolated().await?;
+    let (external, _) = support::isolated().await?;
+    // Independent commit/storage, not fake_effects and never an SDK/provider callback.
+    sqlx::query("CREATE TABLE replay_resources(client_token text NOT NULL, desired_sha256 text NOT NULL, external_id text NOT NULL)")
+        .execute(&external.pool).await?;
+    for (label, complete, count, expected) in [
+        (
+            "incomplete",
+            false,
+            1,
+            RecoveryOutcome::ObservationIncomplete,
+        ),
+        ("absent", true, 0, RecoveryOutcome::NotObserved),
+        ("ambiguous", true, 2, RecoveryOutcome::AmbiguousObservation),
+        (
+            "unique",
+            true,
+            1,
+            RecoveryOutcome::Confirmed {
+                external_id: "replay-one".into(),
+            },
+        ),
+    ] {
+        let intent = store
+            .prepare_external_effect(label, "offline-create", &"d".repeat(64))
+            .await?;
+        let claim = store.claim_external_effect(&intent.id, 15).await?.unwrap();
+        let permit = store.begin_external_dispatch(&claim).await?;
+        for _ in 0..count {
+            sqlx::query("INSERT INTO replay_resources VALUES($1,$2,'replay-one')")
+                .bind(permit.client_token())
+                .bind(permit.desired_sha256())
+                .execute(&external.pool)
+                .await?;
+        }
+        sqlx::query("UPDATE external_effect_intents SET lease_until='-infinity' WHERE id=$1")
+            .bind(&intent.id)
+            .execute(&store.pool)
+            .await?;
+        let result = store.recover_external_effect(&intent.id, 15, |saved| async {
+            let rows: Vec<(String, String, String)> = sqlx::query_as("SELECT client_token,desired_sha256,external_id FROM replay_resources WHERE client_token=$1")
+                .bind(saved.client_token).fetch_all(&external.pool).await?;
+            Ok(ExternalEffectObservation {
+                complete,
+                candidates: rows.into_iter().map(|(client_token, desired_sha256, external_id)| ObservedExternalEffect { client_token, desired_sha256, external_id }).collect(),
+            })
+        }).await?;
+        assert_eq!(result, expected);
+        let saved = store.external_effect(&intent.id).await?;
+        assert_eq!(
+            saved.state,
+            if label == "unique" {
+                "confirmed"
+            } else {
+                "dispatched"
+            }
+        );
+        assert_eq!(saved.client_token, intent.client_token);
+        let effects: i64 =
+            sqlx::query_scalar("SELECT count(*) FROM replay_resources WHERE client_token=$1")
+                .bind(&intent.client_token)
+                .fetch_one(&external.pool)
+                .await?;
+        assert_eq!(effects, count);
+    }
+    Ok(())
+}
 
 #[tokio::test]
 async fn external_intents_have_separate_durable_storage_not_fake_effects() -> anyhow::Result<()> {
@@ -16,6 +89,262 @@ async fn external_intents_have_separate_durable_storage_not_fake_effects() -> an
     assert!(
         exists,
         "External effects need a separately durable intent journal before dispatch"
+    );
+    Ok(())
+}
+
+#[tokio::test]
+async fn recovery_driver_skips_prepared_confirmed_and_busy_intents_without_reading()
+-> anyhow::Result<()> {
+    let (store, _) = support::isolated().await?;
+    let intent = store
+        .prepare_external_effect("skip", "offline-create", &"e".repeat(64))
+        .await?;
+    for lease in [0, 301] {
+        assert!(
+            store
+                .recover_external_effect(&intent.id, lease, |_| async {
+                    panic!("Invalid lease must not read")
+                })
+                .await
+                .is_err()
+        );
+    }
+    assert_eq!(
+        store
+            .recover_external_effect(&intent.id, 15, |_| async {
+                panic!("Prepared intent must not read or dispatch")
+            })
+            .await?,
+        RecoveryOutcome::NotDispatched
+    );
+    let fence: i64 = sqlx::query_scalar("SELECT fence FROM external_effect_intents WHERE id=$1")
+        .bind(&intent.id)
+        .fetch_one(&store.pool)
+        .await?;
+    assert_eq!(fence, 0);
+    let claim = store.claim_external_effect(&intent.id, 15).await?.unwrap();
+    store.begin_external_dispatch(&claim).await?;
+    assert_eq!(
+        store
+            .recover_external_effect(&intent.id, 15, |_| async {
+                panic!("Busy intent must not read")
+            })
+            .await?,
+        RecoveryOutcome::NotClaimed
+    );
+    store
+        .confirm_external_effect(
+            &claim,
+            &ObservedExternalEffect {
+                client_token: intent.client_token.clone(),
+                desired_sha256: intent.desired_sha256.clone(),
+                external_id: "already-recorded".into(),
+            },
+        )
+        .await?;
+    assert_eq!(
+        store
+            .recover_external_effect(&intent.id, 15, |_| async {
+                panic!("Confirmed intent is historical, not a fresh observation")
+            })
+            .await?,
+        RecoveryOutcome::AlreadyConfirmed {
+            external_id: "already-recorded".into()
+        }
+    );
+    assert!(
+        store
+            .recover_external_effect("missing", 15, |_| async {
+                panic!("Missing intent must not read")
+            })
+            .await
+            .is_err()
+    );
+    Ok(())
+}
+
+#[tokio::test]
+async fn recovery_driver_preserves_uncertainty_on_reader_failure_or_mismatched_evidence()
+-> anyhow::Result<()> {
+    let (store, _) = support::isolated().await?;
+    for mode in ["token", "digest", "empty-id", "control-id", "reader-error"] {
+        let intent = store
+            .prepare_external_effect(mode, "offline-create", &"e".repeat(64))
+            .await?;
+        let claim = store.claim_external_effect(&intent.id, 15).await?.unwrap();
+        store.begin_external_dispatch(&claim).await?;
+        sqlx::query("UPDATE external_effect_intents SET lease_until='-infinity' WHERE id=$1")
+            .bind(&intent.id)
+            .execute(&store.pool)
+            .await?;
+        // Trusted-reader fixtures test rejection, not actual external-system identity.
+        let result = store
+            .recover_external_effect(&intent.id, 15, |saved| async move {
+                if mode == "reader-error" {
+                    anyhow::bail!("Offline reader unavailable");
+                }
+                Ok(ExternalEffectObservation {
+                    complete: true,
+                    candidates: vec![ObservedExternalEffect {
+                        client_token: if mode == "token" {
+                            "wrong".into()
+                        } else {
+                            saved.client_token
+                        },
+                        desired_sha256: if mode == "digest" {
+                            "f".repeat(64)
+                        } else {
+                            saved.desired_sha256
+                        },
+                        external_id: match mode {
+                            "empty-id" => "",
+                            "control-id" => "bad\nidentity",
+                            _ => "fixture",
+                        }
+                        .into(),
+                    }],
+                })
+            })
+            .await;
+        if ["token", "digest"].contains(&mode) {
+            assert_eq!(result?, RecoveryOutcome::ObservationMismatch);
+        } else {
+            assert!(result.is_err());
+        }
+        let saved = store.external_effect(&intent.id).await?;
+        assert_eq!(saved.state, "dispatched");
+        assert!(saved.external_id.is_none());
+        assert_eq!(saved.client_token, intent.client_token);
+        assert_eq!(saved.desired_sha256, intent.desired_sha256);
+        assert_eq!(
+            store
+                .recover_external_effect(&intent.id, 15, |_| async {
+                    panic!("Reader failure must not bypass the held lease")
+                })
+                .await?,
+            RecoveryOutcome::NotClaimed
+        );
+    }
+    Ok(())
+}
+
+#[tokio::test]
+async fn recovery_driver_cannot_confirm_after_lease_expiry_or_takeover_during_observation()
+-> anyhow::Result<()> {
+    let (store, _) = support::isolated().await?;
+    for takeover in [false, true] {
+        let intent = store
+            .prepare_external_effect(
+                if takeover { "takeover" } else { "expiry" },
+                "offline-create",
+                &"e".repeat(64),
+            )
+            .await?;
+        let claim = store.claim_external_effect(&intent.id, 15).await?.unwrap();
+        store.begin_external_dispatch(&claim).await?;
+        sqlx::query("UPDATE external_effect_intents SET lease_until='-infinity' WHERE id=$1")
+            .bind(&intent.id)
+            .execute(&store.pool)
+            .await?;
+        let journal = &store;
+        let result = store
+            .recover_external_effect(&intent.id, 15, |saved| async move {
+                sqlx::query(
+                    "UPDATE external_effect_intents SET lease_until='-infinity' WHERE id=$1",
+                )
+                .bind(&saved.id)
+                .execute(&journal.pool)
+                .await?;
+                if takeover {
+                    let next = journal.claim_external_effect(&saved.id, 15).await?.unwrap();
+                    assert_eq!(next.directive(), EffectDirective::ObserveOnly);
+                    journal
+                        .confirm_external_effect(
+                            &next,
+                            &ObservedExternalEffect {
+                                client_token: saved.client_token.clone(),
+                                desired_sha256: saved.desired_sha256.clone(),
+                                external_id: "new-owner".into(),
+                            },
+                        )
+                        .await?;
+                }
+                Ok(ExternalEffectObservation {
+                    complete: true,
+                    candidates: vec![ObservedExternalEffect {
+                        client_token: saved.client_token,
+                        desired_sha256: saved.desired_sha256,
+                        external_id: "obsolete".into(),
+                    }],
+                })
+            })
+            .await;
+        assert!(result.is_err());
+        let saved = store.external_effect(&intent.id).await?;
+        assert_eq!(
+            saved.state,
+            if takeover { "confirmed" } else { "dispatched" }
+        );
+        assert_eq!(
+            saved.external_id.as_deref(),
+            if takeover { Some("new-owner") } else { None }
+        );
+    }
+    Ok(())
+}
+
+#[tokio::test]
+async fn concurrent_recovery_drivers_invoke_only_the_current_reader() -> anyhow::Result<()> {
+    use std::sync::atomic::{AtomicUsize, Ordering};
+    let (store, _) = support::isolated().await?;
+    let intent = store
+        .prepare_external_effect("concurrent-recovery", "offline-create", &"e".repeat(64))
+        .await?;
+    let claim = store.claim_external_effect(&intent.id, 15).await?.unwrap();
+    store.begin_external_dispatch(&claim).await?;
+    sqlx::query("UPDATE external_effect_intents SET lease_until='-infinity' WHERE id=$1")
+        .bind(&intent.id)
+        .execute(&store.pool)
+        .await?;
+    let reads = AtomicUsize::new(0);
+    let read = |saved: navarchnet::external_effects::ExternalEffectIntent| async {
+        reads.fetch_add(1, Ordering::SeqCst);
+        Ok(ExternalEffectObservation {
+            complete: true,
+            candidates: vec![ObservedExternalEffect {
+                client_token: saved.client_token,
+                desired_sha256: saved.desired_sha256,
+                external_id: "one".into(),
+            }],
+        })
+    };
+    let (one, two) = tokio::join!(
+        store.recover_external_effect(&intent.id, 15, read),
+        store.recover_external_effect(&intent.id, 15, read)
+    );
+    let results = [one?, two?];
+    assert_eq!(reads.load(Ordering::SeqCst), 1);
+    assert_eq!(
+        results
+            .iter()
+            .filter(|value| matches!(value, RecoveryOutcome::Confirmed { .. }))
+            .count(),
+        1
+    );
+    assert!(results.iter().all(|value| matches!(
+        value,
+        RecoveryOutcome::Confirmed { .. }
+            | RecoveryOutcome::AlreadyConfirmed { .. }
+            | RecoveryOutcome::NotClaimed
+    )));
+    assert_eq!(
+        store
+            .external_effect(&intent.id)
+            .await?
+            .external_id
+            .as_deref(),
+        Some("one")
     );
     Ok(())
 }
@@ -326,16 +655,19 @@ async fn sigkill_after_separate_external_commit_recovers_by_observation_only() -
         sqlx::query_as("SELECT client_token,desired_sha256,external_id FROM replay_resources")
             .fetch_one(&external.pool)
             .await?;
-    resumed
-        .confirm_external_effect(
-            &claim,
-            &ObservedExternalEffect {
-                client_token: token,
-                desired_sha256: digest,
-                external_id: id,
-            },
-        )
+    assert_eq!(token, intent.client_token);
+    assert_eq!(digest, intent.desired_sha256);
+    // Retire the manually inspected claim; the driver must obtain its own newer lease/fence.
+    sqlx::query("UPDATE external_effect_intents SET lease_until='-infinity' WHERE id=$1")
+        .bind(&intent.id)
+        .execute(&resumed.pool)
         .await?;
+    let outcome = resumed.recover_external_effect(&intent.id, 15, |saved| async {
+        let rows: Vec<(String, String, String)> = sqlx::query_as("SELECT client_token,desired_sha256,external_id FROM replay_resources WHERE client_token=$1")
+            .bind(saved.client_token).fetch_all(&external.pool).await?;
+        Ok(ExternalEffectObservation { complete: true, candidates: rows.into_iter().map(|(client_token, desired_sha256, external_id)| ObservedExternalEffect { client_token, desired_sha256, external_id }).collect() })
+    }).await?;
+    assert_eq!(outcome, RecoveryOutcome::Confirmed { external_id: id });
     assert_eq!(
         resumed.external_effect(&intent.id).await?.state,
         "confirmed"
