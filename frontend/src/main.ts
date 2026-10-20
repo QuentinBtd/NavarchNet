@@ -12,6 +12,7 @@ import type {
   RoleRegistration,
   Snapshot,
   TgwLookupResponse,
+  TgwSourceResponse,
   TopologyView,
   VerifiedAccount,
   VpcLookupResponse,
@@ -192,6 +193,7 @@ async function loadAwsTopology(id: string) {
   if (version !== awsViewVersion || selectedAwsAccountId !== id) return;
   element("aws-topology").replaceChildren(
     renderAwsTopology(view, {
+      networkAccounts: snapshot?.aws_accounts ?? [],
       get canConsent() {
         return isAdmin() && !!snapshot?.aws_read_only_enabled;
       },
@@ -205,6 +207,20 @@ async function loadAwsTopology(id: string) {
           const parameters = new URLSearchParams(query);
           const result = await request<TgwLookupResponse>(
             `/aws/accounts/${encodeURIComponent(id)}/tgw-route-lookup?${parameters}`,
+          );
+          if (version !== awsViewVersion || selectedAwsAccountId !== id) return;
+          return result;
+        } catch (error) {
+          if (version !== awsViewVersion || selectedAwsAccountId !== id) return;
+          throw error;
+        }
+      },
+      onSourceLookup: async (query) => {
+        if (version !== awsViewVersion || selectedAwsAccountId !== id) return;
+        try {
+          const parameters = new URLSearchParams(query);
+          const result = await request<TgwSourceResponse>(
+            `/aws/accounts/${encodeURIComponent(id)}/tgw-source-lookup?${parameters}`,
           );
           if (version !== awsViewVersion || selectedAwsAccountId !== id) return;
           return result;

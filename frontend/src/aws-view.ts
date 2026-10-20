@@ -1,4 +1,5 @@
-import type { AdoptionConsent, TopologyView } from "./generated";
+import type { AdoptionConsent, TopologyView, VerifiedAccount } from "./generated";
+import { renderSourceHandoff, type SavedSourceHandoff } from "./source-handoff-view";
 import { renderTgwLookup, type SavedLookup } from "./tgw-lookup-view";
 import { text } from "./view";
 import { renderVpcLookup, type SavedVpcLookup } from "./vpc-lookup-view";
@@ -9,6 +10,8 @@ export function renderAwsTopology(
     onConsent: (consent: AdoptionConsent) => Promise<void>;
     onLookup?: SavedLookup;
     onVpcLookup?: SavedVpcLookup;
+    onSourceLookup?: SavedSourceHandoff;
+    networkAccounts?: VerifiedAccount[];
   },
 ): HTMLElement {
   const root = document.createElement("section");
@@ -71,6 +74,26 @@ export function renderAwsTopology(
           );
         if (selection && options.onVpcLookup)
           row.append(renderVpcLookup(topology.id, resource.id, selection, index, options.onVpcLookup));
+        if (selection && options.onSourceLookup) {
+          const lookup = options.onSourceLookup;
+          const detail = document.createElement("details");
+          detail.append(text("summary", "Inspect saved source-to-TGW candidate"));
+          // Construct account choices only when opened, not 500 options on every subnet card.
+          detail.ontoggle = () => {
+            if (detail.open && !detail.querySelector("form"))
+              detail.append(
+                renderSourceHandoff(
+                  topology.id,
+                  resource.id,
+                  selection,
+                  index,
+                  options.networkAccounts ?? [],
+                  lookup,
+                ),
+              );
+          };
+          row.append(detail);
+        }
         if (resource.public_ips.length)
           row.append(text("p", `Reported public IPs: ${resource.public_ips.join(", ")}`));
         if (resource.availability_mode)

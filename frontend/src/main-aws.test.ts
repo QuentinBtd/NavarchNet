@@ -2,6 +2,7 @@ import { afterEach, expect, it, vi } from "vitest";
 import type {
   Snapshot,
   TgwLookupResponse,
+  TgwSourceResponse,
   TopologyView,
   VerifiedAccount,
   VpcLookupResponse,
@@ -192,6 +193,89 @@ for (const change of ["account switch", "logout"] as const) {
       expect(document.querySelector("#aws-topology")?.childElementCount).toBe(0);
       expect(document.querySelector<HTMLElement>("#workspace")?.hidden).toBe(true);
     }
+  });
+}
+for (const change of ["account switch", "logout"] as const) {
+  it(`late source-to-TGW candidate is discarded after ${change} even if fetch ignores abort`, async () => {
+    const old = deferred();
+    const calls: string[] = [];
+    await boot(async (path) => {
+      if (path.includes("tgw-source-lookup")) {
+        calls.push(path);
+        return old.promise;
+      }
+      return response(vpcTopology(path.includes("account-a") ? "account-a" : "account-b"));
+    });
+    select("account-a");
+    await vi.waitFor(() => expect(document.querySelector("form[data-vpc-route-lookup]")).not.toBeNull());
+    const detail = [...document.querySelectorAll<HTMLDetailsElement>("#aws-topology details")].find(
+      (node) => node.querySelector("summary")?.textContent === "Inspect saved source-to-TGW candidate",
+    );
+    if (!detail) throw new Error("Source candidate detail missing");
+    expect(detail.querySelector("form")).toBeNull();
+    detail.open = true;
+    detail.dispatchEvent(new Event("toggle"));
+    const form = detail.querySelector<HTMLFormElement>("form");
+    const input = form?.querySelector("input");
+    const network = form?.querySelector("select");
+    if (!form || !input || !network) throw new Error("Source candidate controls missing");
+    network.value = "account-b";
+    input.value = "203.0.113.1";
+    form.dispatchEvent(new Event("submit", { cancelable: true }));
+    expect(calls).toEqual([
+      "/api/v1/aws/accounts/account-a/tgw-source-lookup?network_account_id=account-b&subnet_id=subnet-account-a&destination=203.0.113.1",
+    ]);
+    if (change === "account switch") {
+      select("account-b");
+      await vi.waitFor(() =>
+        expect(document.querySelector("#aws-topology")?.textContent).toContain("subnet-account-b"),
+      );
+    } else document.querySelector<HTMLButtonElement>("#logout")?.click();
+    const result: TgwSourceResponse = {
+      source_topology_id: "snapshot-account-a",
+      network_topology_id: "snapshot-account-b",
+      source_completed_at: "2",
+      network_completed_at: "4",
+      network_account_id: "account-b",
+      subnet_id: "subnet-account-a",
+      destination: "203.0.113.1",
+      execution_enabled: false,
+      connectivity_tested: false,
+      result: {
+        source: {
+          status: "reported",
+          route_table_id: "rtb-account-a",
+          source: "implicit_main",
+          lookup: {
+            status: "reported_route",
+            destination_cidr: "0.0.0.0/0",
+            origin: "CreateRoute",
+            target: { kind: "transit_gateway", id: "tgw-old-source-response" },
+          },
+        },
+        handoff: {
+          status: "reported_candidate",
+          transit_gateway_id: "tgw-old-source-response",
+          ingress_attachment_id: "ingress-old",
+          attachment_subnet_id: "subnet-attachment",
+          az_id: "euw1-az1",
+          route_table_id: "tgw-table",
+          lookup: {
+            status: "reported_forward",
+            destination_cidr: "0.0.0.0/0",
+            route_type: "static",
+            attachment_ids: ["egress"],
+          },
+        },
+      },
+    };
+    old.resolve(response(result));
+    await new Promise((done) => setTimeout(done, 10));
+    expect(document.querySelector("#aws-topology")?.textContent).not.toContain("tgw-old-source-response");
+    if (change === "logout") expect(document.querySelector("#aws-topology")?.childElementCount).toBe(0);
+    form.dispatchEvent(new Event("submit", { cancelable: true }));
+    await new Promise((done) => setTimeout(done, 10));
+    expect(calls).toHaveLength(1);
   });
 }
 afterEach(() => {

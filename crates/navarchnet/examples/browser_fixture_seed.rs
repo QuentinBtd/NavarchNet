@@ -192,15 +192,103 @@ async fn main() -> anyhow::Result<()> {
             route("10.2.0.0/16", "blackhole", Default::default()),
             local,
         ];
+        let mut resources = vec![parent, table, vpc, subnet, vpc_table];
+        if suffix == "a" {
+            let mut source_vpc = AwsResource::new(ResourceKind::Vpc, "vpc-browser-source".into());
+            source_vpc.owner_account_id = Some(account_id.into());
+            source_vpc.state = Some("available".into());
+            source_vpc.cidrs = vec!["10.10.0.0/16".into(), "2001:db8:1::/56".into()];
+            resources.push(source_vpc);
+            for (id, az, ipv4, ipv6) in [
+                (
+                    "subnet-browser-source",
+                    "euw1-az1",
+                    "10.10.1.0/24",
+                    "2001:db8:1:3::/64",
+                ),
+                (
+                    "subnet-browser-attachment-1",
+                    "euw1-az1",
+                    "10.10.254.0/24",
+                    "2001:db8:1:1::/64",
+                ),
+                (
+                    "subnet-browser-attachment-2",
+                    "euw1-az2",
+                    "10.10.253.0/24",
+                    "2001:db8:1:2::/64",
+                ),
+            ] {
+                let mut subnet = AwsResource::new(ResourceKind::Subnet, id.into());
+                subnet.owner_account_id = Some(account_id.into());
+                subnet.vpc_id = Some("vpc-browser-source".into());
+                subnet.state = Some("available".into());
+                subnet.az_id = Some(az.into());
+                subnet.cidrs = vec![ipv4.into(), ipv6.into()];
+                subnet
+                    .tags
+                    .insert("Name".into(), "Source subnet <img src=x>".into());
+                resources.push(subnet);
+            }
+            let mut routes =
+                AwsResource::new(ResourceKind::RouteTable, "rtb-browser-source".into());
+            routes.owner_account_id = Some(account_id.into());
+            routes.vpc_id = Some("vpc-browser-source".into());
+            routes.associations.push(RouteAssociation {
+                id: Some("rtbassoc-browser-source".into()),
+                main: true,
+                subnet_id: None,
+                gateway_id: None,
+                state: Some("associated".into()),
+            });
+            routes.routes.push(route(
+                "0.0.0.0/0",
+                "active",
+                [("transitGatewayId".into(), "tgw-browser-b".into())].into(),
+            ));
+            let mut local = route(
+                "10.10.0.0/16",
+                "active",
+                [("gatewayId".into(), "local".into())].into(),
+            );
+            local.origin = Some("CreateRouteTable".into());
+            routes.routes.push(local);
+            resources.push(routes);
+        } else {
+            let mut ingress = AwsResource::new(
+                ResourceKind::VpcAttachment,
+                "tgw-attach-browser-source".into(),
+            );
+            ingress.owner_account_id = Some("123456789012".into());
+            ingress.vpc_id = Some("vpc-browser-source".into());
+            ingress.state = Some("available".into());
+            ingress.related_ids = vec![
+                "tgw-browser-b".into(),
+                "subnet-browser-attachment-1".into(),
+                "subnet-browser-attachment-2".into(),
+            ];
+            resources[1]
+                .tgw_associations
+                .as_mut()
+                .unwrap()
+                .push(TransitGatewayTableLink {
+                    attachment_id: Some(ingress.id.clone()),
+                    resource_id: ingress.vpc_id.clone(),
+                    resource_type: Some("vpc".into()),
+                    state: Some("associated".into()),
+                    route_table_announcement_id: None,
+                });
+            resources.push(ingress);
+        }
         let topology = AwsTopology {
             id: uuid::Uuid::new_v4().to_string(),
             account_id: account.id,
             aws_account_id: account_id.into(),
             region: role.region,
             started_at: "1".into(),
-            completed_at: "2".into(),
+            completed_at: if suffix == "a" { "2" } else { "4" }.into(),
             session_name: "offline-fixture-no-sdk".into(),
-            resources: vec![parent, table, vpc, subnet, vpc_table],
+            resources,
             request_ids: vec!["offline-browser-fixture".into()],
             complete_for_supported_queries: true,
             limitations: vec![
