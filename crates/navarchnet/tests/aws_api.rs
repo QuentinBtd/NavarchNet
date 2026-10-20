@@ -447,6 +447,132 @@ async fn saved_ingress_lookup_uses_reported_association_offline_without_writes()
     Ok(())
 }
 #[tokio::test]
+async fn saved_vpc_lookup_reads_selected_subnet_routes_offline_without_writes() -> anyhow::Result<()>
+{
+    let (store, _) = support::isolated().await?;
+    let fixture = AwsFixture::default();
+    let role: RoleRegistration = serde_json::from_value(registration())?;
+    let account = store
+        .register_aws_verified("fixture", &role, "123456789012", "fixture")
+        .await?;
+    let mut topology = fixture.discover(&role, &account, "fixture").await?;
+    let vpc = &mut topology.resources[0];
+    vpc.state = Some("available".into());
+    let mut subnet = AwsResource::new(ResourceKind::Subnet, "subnet-fixture".into());
+    subnet.vpc_id = Some(vpc.id.clone());
+    subnet.owner_account_id = Some(account.aws_account_id.clone());
+    subnet.state = Some("available".into());
+    let mut table = AwsResource::new(ResourceKind::RouteTable, "rtb-main".into());
+    table.vpc_id = Some(vpc.id.clone());
+    table.owner_account_id = Some(account.aws_account_id.clone());
+    table.associations.push(RouteAssociation {
+        id: Some("rtbassoc-main".into()),
+        subnet_id: None,
+        gateway_id: None,
+        main: true,
+        state: Some("associated".into()),
+    });
+    table.routes.push(ObservedRoute {
+        ipv4_destination: Some("0.0.0.0/0".into()),
+        ipv6_destination: None,
+        prefix_list_destination: None,
+        state: Some("active".into()),
+        origin: Some("CreateRoute".into()),
+        targets: [("transitGatewayId".into(), "tgw-egress".into())].into(),
+    });
+    topology.resources.extend([subnet, table]);
+    let (_, _, generation) = store.begin_aws_discovery("fixture", &account.id).await?;
+    store
+        .finish_aws_discovery("fixture", generation, &topology)
+        .await?;
+    let before = serde_json::to_value(store.aws_topology(&account.id).await?)?;
+    let audit_before: i64 = sqlx::query_scalar("SELECT count(*) FROM audit")
+        .fetch_one(&store.pool)
+        .await?;
+    let reader = "r".repeat(32);
+    let app = api::router(AppState {
+        store: store.clone(),
+        auth: Arc::new(Auth::demo("a".repeat(32), reader.clone())?),
+        aws: None,
+    });
+    let path = format!(
+        "/aws/accounts/{}/vpc-route-lookup?subnet_id=subnet-fixture&destination=203.0.113.1",
+        account.id
+    );
+    assert_eq!(
+        request(&app, "GET", &path, None, None).await?.0,
+        StatusCode::UNAUTHORIZED
+    );
+    let (status, result) = request(&app, "GET", &path, Some(&reader), None).await?;
+    assert_eq!(status, StatusCode::OK);
+    assert_eq!(result["topology_id"], topology.id);
+    assert_eq!(result["subnet_id"], "subnet-fixture");
+    assert_eq!(result["destination"], "203.0.113.1");
+    assert_eq!(result["result"]["status"], "reported");
+    assert_eq!(result["result"]["route_table_id"], "rtb-main");
+    assert_eq!(result["result"]["source"], "implicit_main");
+    assert_eq!(result["result"]["lookup"]["status"], "reported_route");
+    assert_eq!(result["result"]["lookup"]["destination_cidr"], "0.0.0.0/0");
+    assert_eq!(
+        result["result"]["lookup"]["target"],
+        json!({"kind":"transit_gateway","id":"tgw-egress"})
+    );
+    assert_eq!(result["execution_enabled"], false);
+    assert_eq!(result["connectivity_tested"], false);
+    assert_eq!(
+        request(
+            &app,
+            "GET",
+            &format!("{path}&unexpected=true"),
+            Some(&reader),
+            None
+        )
+        .await?
+        .0,
+        StatusCode::BAD_REQUEST
+    );
+    for invalid in [
+        path.replace("subnet-fixture", &"x".repeat(2049)),
+        path.replace("203.0.113.1", &"x".repeat(65)),
+    ] {
+        assert_eq!(
+            request(&app, "GET", &invalid, Some(&reader), None).await?.0,
+            StatusCode::CONFLICT
+        );
+    }
+    let (_, invalid) = request(
+        &app,
+        "GET",
+        &path.replace("203.0.113.1", "not-an-ip"),
+        Some(&reader),
+        None,
+    )
+    .await?;
+    assert_eq!(invalid["result"]["lookup"]["reason"], "invalid_destination");
+    let (_, missing) = request(
+        &app,
+        "GET",
+        &path.replace("subnet-fixture", "missing"),
+        Some(&reader),
+        None,
+    )
+    .await?;
+    assert_eq!(missing["result"]["reason"], "missing_subnet");
+    assert_eq!(
+        before,
+        serde_json::to_value(store.aws_topology(&account.id).await?)?
+    );
+    let audit_after: i64 = sqlx::query_scalar("SELECT count(*) FROM audit")
+        .fetch_one(&store.pool)
+        .await?;
+    assert_eq!(audit_before, audit_after);
+    assert!(store.plans().await?.is_empty());
+    assert!(store.inventories().await?.is_empty());
+    assert_eq!(fixture.verifications.load(Ordering::SeqCst), 0);
+    assert_eq!(fixture.discoveries.load(Ordering::SeqCst), 1);
+    Ok(())
+}
+#[tokio::test]
 async fn disabled_provider_rejects_admin_onboarding_without_sdk_or_credential_loading()
 -> anyhow::Result<()> {
     let (store, _) = support::isolated().await?;

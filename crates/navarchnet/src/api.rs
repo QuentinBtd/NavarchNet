@@ -89,6 +89,21 @@ pub struct TgwIngressResponse {
     pub execution_enabled: bool,
     pub connectivity_tested: bool,
 }
+#[derive(Deserialize, TS)]
+#[serde(deny_unknown_fields)]
+pub struct VpcLookupRequest {
+    pub subnet_id: String,
+    pub destination: String,
+}
+#[derive(Serialize, TS)]
+pub struct VpcLookupResponse {
+    pub topology_id: String,
+    pub subnet_id: String,
+    pub destination: String,
+    pub result: aws::vpc_lookup::VpcSubnetLookupResult,
+    pub execution_enabled: bool,
+    pub connectivity_tested: bool,
+}
 impl From<anyhow::Error> for Failure {
     fn from(e: anyhow::Error) -> Self {
         Self(e)
@@ -125,6 +140,7 @@ pub fn router(state: AppState) -> Router {
             get(lookup_aws_ingress),
         )
         .route("/aws/accounts/{id}/adoptions", post(adopt_aws))
+        .route("/aws/accounts/{id}/vpc-route-lookup", get(lookup_aws_vpc))
         .route("/networks", post(create_network))
         .route("/plans", post(create_plan))
         .route("/plans/{id}/apply", post(apply))
@@ -238,6 +254,25 @@ async fn lookup_aws_ingress(
     Ok(Json(TgwIngressResponse {
         topology_id: view.topology.id,
         ingress_attachment_id: query.ingress_attachment_id,
+        destination: query.destination,
+        result,
+        execution_enabled: false,
+        connectivity_tested: false,
+    }))
+}
+async fn lookup_aws_vpc(
+    State(s): State<AppState>,
+    Path(id): Path<String>,
+    Query(query): Query<VpcLookupRequest>,
+) -> Result<Json<VpcLookupResponse>, Failure> {
+    if query.subnet_id.len() > 2048 || query.destination.len() > 64 {
+        return Err(anyhow::anyhow!("VPC lookup input exceeds its bound").into());
+    }
+    let view = s.store.aws_topology(&id).await?;
+    let result = aws::vpc_lookup::lookup(&view.topology, &query.subnet_id, &query.destination);
+    Ok(Json(VpcLookupResponse {
+        topology_id: view.topology.id,
+        subnet_id: query.subnet_id,
         destination: query.destination,
         result,
         execution_enabled: false,

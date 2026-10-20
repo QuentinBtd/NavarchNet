@@ -35,6 +35,16 @@ Official Docker Hub API tag records were read before pinning multi-architecture 
 
 GitHub action tag refs were resolved from their actual primary repositories with `git ls-remote` before copying full SHAs into CI: checkout v6, setup-node v6, rust-cache v2 and upload-artifact v4. No mutable action tag is used in the workflow.
 
+## VPC saved-subnet route lookup — October 20, 2026
+
+Rechecked the following official pages through the browser. These are interpretation rules for stored observations, not live AWS acceptance. Captures/decisions are retained in the mission's `persistent-migration/vpc-route-primary-sources.json`.
+
+| Primary source | Checked decision / boundary |
+| --- | --- |
+| https://docs.aws.amazon.com/vpc/latest/userguide/route-tables-priority.html | Separate IPv4/IPv6 longest-prefix matching; static routes beat VGW-propagated routes at identical destinations. Prefix-list members can be more specific and overlapping prefix lists can have provider-chosen priority; without members this lookup returns unresolved. No BGP tie-break is invented. |
+| https://docs.aws.amazon.com/vpc/latest/userguide/subnet-route-tables.html | Explicit subnet versus implicit main selection, more-specific routing and AWS-reserved service ranges 169.254.168.0/22 and fd00:ec2::/32. An overlapping broader route does not forward those service destinations, so they are not presented as ordinary default egress. |
+| https://docs.aws.amazon.com/AWSEC2/latest/APIReference/API_Route.html | Optional CIDR/prefix-list, origin/state and target fields. The prose mentions VPC Route Server Advertisement although its displayed origin value list omits it; unknown/unsupported origins are deliberately unresolved, never assumed static. A reported active target is not independent target-health or connectivity evidence. |
+
 ## TGW route-content and offline lookup continuation — October 20, 2026
 
 Ingress continuation rechecked the official `how-transit-gateways-work.html` route-table association section, `API_GetTransitGatewayRouteTableAssociations.html`, `API_TransitGatewayRouteTableAssociation.html`, and `API_TransitGatewayVpcAttachment.html` on October 20, 2026. An attachment associates with one table but can propagate to several; the typed association includes optional attachment/resource/type/state fields. VPC attachments separately report their gateway, VPC, VPC owner and lifecycle state. The new offline ingress lookup requires unambiguous ready reported associations, supports different VPC/gateway owners without treating sharing as ownership, and refuses missing evidence rather than inventing defaults. These are source semantics and credential-free fixture checks, not executed AWS acceptance. Primary page captures are retained in the task's `persistent-migration/ingress-primary-sources.json`.
