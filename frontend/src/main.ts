@@ -17,6 +17,7 @@ import type {
   TgwTargetResponse,
   TopologyView,
   VerifiedAccount,
+  VpcCidrCoverageResponse,
   VpcLookupResponse,
 } from "./generated";
 import { Session } from "./session";
@@ -268,6 +269,20 @@ async function loadAwsTopology(id: string) {
           const parameters = new URLSearchParams(query);
           const result = await request<NatReferenceResponse>(
             `/aws/accounts/${encodeURIComponent(networkAccountId)}/nat-reference-lookup?${parameters}`,
+          );
+          if (version !== awsViewVersion || selectedAwsAccountId !== id) return;
+          return result;
+        } catch (error) {
+          if (version !== awsViewVersion || selectedAwsAccountId !== id) return;
+          throw error;
+        }
+      },
+      onVpcCidrCoverage: async (query) => {
+        if (version !== awsViewVersion || selectedAwsAccountId !== id) return;
+        try {
+          const parameters = new URLSearchParams(query);
+          const result = await request<VpcCidrCoverageResponse>(
+            `/aws/accounts/${encodeURIComponent(id)}/vpc-cidr-coverage?${parameters}`,
           );
           if (version !== awsViewVersion || selectedAwsAccountId !== id) return;
           return result;

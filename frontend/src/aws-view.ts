@@ -9,6 +9,7 @@ import {
 } from "./source-handoff-view";
 import { renderTgwLookup, type SavedLookup } from "./tgw-lookup-view";
 import { text } from "./view";
+import { renderVpcCidrCoverage, type SavedVpcCidrCoverage } from "./vpc-cidr-coverage-view";
 import { renderVpcLookup, type SavedVpcLookup } from "./vpc-lookup-view";
 export function renderAwsTopology(
   view: TopologyView,
@@ -17,6 +18,7 @@ export function renderAwsTopology(
     onConsent: (consent: AdoptionConsent) => Promise<void>;
     onLookup?: SavedLookup;
     onVpcLookup?: SavedVpcLookup;
+    onVpcCidrCoverage?: SavedVpcCidrCoverage;
     onNatReferenceLookup?: SavedNatReferenceLookup;
     isCurrent?: () => boolean;
     onSourceLookup?: SavedSourceHandoff;
@@ -108,6 +110,16 @@ export function renderAwsTopology(
                 : undefined,
             ),
           );
+        if (selection && options.onVpcCidrCoverage) {
+          const inspector: HTMLDetailsElement = renderVpcCidrCoverage(
+            view,
+            resource.id,
+            index,
+            options.onVpcCidrCoverage,
+            () => (!options.isCurrent || options.isCurrent()) && root.contains(inspector),
+          );
+          row.append(inspector);
+        }
         if (selection && options.onSourceLookup) {
           const lookup = options.onSourceLookup;
           const detail = document.createElement("details");

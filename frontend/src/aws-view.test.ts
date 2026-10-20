@@ -1,4 +1,4 @@
-import { describe, expect, it } from "vitest";
+import { describe, expect, it, vi } from "vitest";
 import { renderAwsTopology } from "./aws-view";
 import type { AdoptionConsent, AwsResource, TopologyView } from "./generated";
 
@@ -47,6 +47,46 @@ function fixture(): TopologyView {
   };
 }
 describe("read-only AWS observations", () => {
+  it("keeps CIDR controls optional/lazy and retires retained actions when resource paging recreates cards", () => {
+    const view = fixture(),
+      first = view.topology.resources[0];
+    if (!first) throw new Error("Missing fixture");
+    view.topology.resources = [
+      first,
+      { ...first, kind: "subnet", id: "subnet-a", vpc_id: first.id },
+      ...Array.from({ length: 199 }, (_, index) => ({ ...first, id: `vpc-extra-${index}` })),
+    ];
+    view.subnet_route_tables = [
+      {
+        subnet_id: "subnet-a",
+        vpc_id: first.id,
+        selection: { status: "unresolved", reason: "missing_route_table" },
+      },
+    ];
+    const options = { canConsent: false, onConsent: async () => {} };
+    expect(renderAwsTopology(view, options).querySelector("[data-vpc-cidr-inspector]")).toBeNull();
+    const lookup = vi.fn(async () => undefined);
+    const node = renderAwsTopology(view, { ...options, onVpcCidrCoverage: lookup });
+    const detail = node.querySelector<HTMLDetailsElement>("[data-vpc-cidr-inspector]");
+    if (!detail) throw new Error("Missing inspector");
+    expect(detail.querySelector("input")).toBeNull();
+    detail.open = true;
+    detail.dispatchEvent(new Event("toggle"));
+    const input = detail.querySelector("input"),
+      action = detail.querySelector("button");
+    if (!input || !action) throw new Error("Missing controls");
+    const more = [...node.querySelectorAll("button")].find(
+      (button) => button.textContent === "Show more observed records",
+    );
+    if (!more) throw new Error("Missing resource continuation");
+    more.click();
+    expect(node.contains(detail)).toBe(false);
+    input.value = "10.0.0.0/16";
+    action.click();
+    expect(lookup).not.toHaveBeenCalled();
+    expect(node.querySelectorAll("[data-vpc-cidr-inspector]")).toHaveLength(1);
+    expect(node.querySelector("[data-vpc-cidr-inspector] input")).toBeNull();
+  });
   it("lazily shows every literal NAT tuple without choosing a primary or successful egress", () => {
     const view = fixture();
     const resource = view.topology.resources[0];

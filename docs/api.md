@@ -25,7 +25,13 @@ Saved topology resources include additive `nat_gateway: NatGatewayMetadata | nul
 - `POST /operations/{id}/demo-drift`: demo-auth administrators only; removes one fake managed effect after execution is terminal. Reports drift, does not repair it.
 - `GET /audit`: most recent 1000 append-only actor/event/target/timestamp records.
 
-## Saved destination-CIDR decision coverage
+## Saved CIDR operator inspector
+
+The existing subnet article exposes an initially collapsed inspector using the existing reader `vpc-cidr-coverage` GET. It creates blank independent controls lazily and sends the literal destination CIDR only on an explicit button; no point/source host, outgoing destination, NAT reference, inferred return ingress or automatic discovery is substituted. No API, backend, generated contract, permission or dependency changes accompany this UI continuation.
+
+Before displaying any successful prefix, it binds all saved registration/snapshot/time/AWS-account/region/query/completeness/provenance fields and exact reference/false/partition-complete markers, validates every interval/result shape, and checks the selected original resource/index/association structurally against captured evidence independent of key order. Scope/association failures retain null table evidence and unknown reasons. The server remains responsible for canonical IP parsing and exact ordered/disjoint coverage; the browser neither rederives routing nor treats complete unknown decisions as usable connectivity. Details lazily expose all intervals, limitations, request IDs and original-table collections in 50-row local DOM batches, not API pagination or an AWS quota. Strings are inert and reported targets are not followed. Input/request and actual account/topology/session generations fence late replies and retained handlers; resource-page re-render retires detached controls. Native Enter/validity cannot submit or block the independent point form. Current errors/discards allow retry; changed snapshots require explicit refresh. Existing Session errors expose the error string, not structured budget dimension/limit guarantees.
+
+## Saved destination-CIDR decision coverage — original API-only checkpoint
 
 `GET /aws/accounts/{id}/vpc-cidr-coverage?subnet_id=...&destination_cidr=...` is an authenticated reader-accessible, SDK-off analysis of the latest immutable saved observation. It accepts only those two query keys, a nonempty control-free literal subnet ID (at most 2048 UTF-8 bytes) and a canonical IPv4/IPv6 network CIDR (at most 64 bytes). Host bits, surrounding whitespace and noncanonical textual spellings are rejected, never repaired. This stricter new input contract does not normalize existing observed route literals or change the existing point API.
 

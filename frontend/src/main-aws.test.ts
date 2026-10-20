@@ -7,6 +7,7 @@ import type {
   TgwTargetResponse,
   TopologyView,
   VerifiedAccount,
+  VpcCidrCoverageResponse,
   VpcLookupResponse,
 } from "./generated";
 
@@ -297,6 +298,123 @@ function startLookup() {
   input.value = "203.0.113.1";
   form.dispatchEvent(new Event("submit", { cancelable: true }));
 }
+it("CIDR reads use exact account/query bindings and retire on switch, ABA, reload, login and discovery despite ignored abort", async () => {
+  for (const retirement of ["switch", "ABA", "reload", "logout", "login", "discovery"])
+    for (const failed of [false, true]) {
+      const old = deferred(),
+        discovery = deferred(),
+        paths: string[] = [];
+      await boot(
+        async (path) => {
+          if (path.endsWith("/discover")) return discovery.promise;
+          if (path.includes("vpc-cidr-coverage?")) {
+            paths.push(path);
+            return old.promise;
+          }
+          return response(vpcTopology(path.includes("account-a") ? "account-a" : "account-b"));
+        },
+        retirement === "discovery" ? { ...snapshot, role: "admin", aws_read_only_enabled: true } : snapshot,
+      );
+      select("account-a");
+      await vi.waitFor(() =>
+        expect(document.querySelector("details[data-vpc-cidr-inspector]")).not.toBeNull(),
+      );
+      const detail = document.querySelector<HTMLDetailsElement>("details[data-vpc-cidr-inspector]");
+      if (!detail) throw new Error("Missing CIDR detail");
+      detail.open = true;
+      detail.dispatchEvent(new Event("toggle"));
+      const input = detail.querySelector("input"),
+        action = detail.querySelector("button"),
+        status = detail.querySelector("[role=status]");
+      if (!input || !action || !status) throw new Error("Missing CIDR controls");
+      input.value = "10.0.0.0/16";
+      action.click();
+      action.click();
+      expect(paths).toEqual([
+        "/api/v1/aws/accounts/account-a/vpc-cidr-coverage?subnet_id=subnet-account-a&destination_cidr=10.0.0.0%2F16",
+      ]);
+      if (retirement === "switch" || retirement === "ABA") {
+        select("account-b");
+        await vi.waitFor(() =>
+          expect(document.querySelector("#aws-topology")?.textContent).toContain("subnet-account-b"),
+        );
+      }
+      if (retirement === "ABA" || retirement === "reload") {
+        select("account-a");
+        await vi.waitFor(() =>
+          expect(document.querySelector("#aws-topology")?.textContent).toContain("subnet-account-a"),
+        );
+      }
+      if (retirement === "logout" || retirement === "login")
+        document.querySelector<HTMLButtonElement>("#logout")?.click();
+      if (retirement === "login") {
+        const token = document.querySelector<HTMLInputElement>("#token");
+        if (!token) throw new Error("Missing token");
+        token.value = "fixture-reader";
+        document.querySelector("#login")?.dispatchEvent(new Event("submit", { cancelable: true }));
+        await vi.waitFor(() => expect(document.querySelectorAll("#aws-account-list li")).toHaveLength(2));
+        select("account-a");
+        await vi.waitFor(() =>
+          expect(document.querySelector("#aws-topology")?.textContent).toContain("subnet-account-a"),
+        );
+      }
+      if (retirement === "discovery") {
+        const row = [...document.querySelectorAll("#aws-account-list li")].find((node) =>
+          node.textContent?.includes("Fixture account-a"),
+        );
+        const refresh = row?.querySelectorAll<HTMLButtonElement>("button")[1];
+        if (!refresh) throw new Error("Missing refresh");
+        refresh.click();
+        expect(document.querySelector("#aws-topology")?.childElementCount).toBe(0);
+      }
+      const before = status.textContent;
+      const body: VpcCidrCoverageResponse = {
+        account_id: "account-a",
+        topology_id: "snapshot-account-a",
+        completed_at: "2",
+        aws_account_id: "123456789012",
+        region: "eu-west-1",
+        subnet_id: "subnet-account-a",
+        destination_cidr: "10.0.0.0/16",
+        complete_for_supported_queries: true,
+        limitations: [],
+        request_ids: [],
+        reference_only: true,
+        execution_enabled: false,
+        connectivity_tested: false,
+        coverage: {
+          destination_cidr: "10.0.0.0/16",
+          partition_complete: true,
+          table_evidence: null,
+          segments: [
+            {
+              start: "10.0.0.0",
+              end_inclusive: "10.0.255.255",
+              result: { status: "unresolved", reason: "scope_not_ready" },
+            },
+          ],
+        },
+      };
+      old.resolve(
+        failed
+          ? new Response(JSON.stringify({ error: "late CIDR failure" }), { status: 409 })
+          : response(body),
+      );
+      await new Promise((done) => setTimeout(done, 10));
+      expect(status.textContent).toBe(before);
+      expect(detail.querySelectorAll("[data-vpc-cidr-interval]")).toHaveLength(0);
+      action.click();
+      detail.dispatchEvent(new Event("toggle"));
+      expect(paths).toHaveLength(1);
+      expect(document.querySelector("#aws-topology")?.textContent).not.toContain("late CIDR failure");
+      if (retirement === "discovery") {
+        discovery.resolve(response({}));
+        await vi.waitFor(() =>
+          expect(document.querySelector("#aws-topology")?.textContent).toContain("subnet-account-a"),
+        );
+      }
+    }
+}, 15000);
 it("attachment point requests use A under a B candidate and outer generations fence ignored-abort success/error", async () => {
   for (const retirement of ["switch", "ABA", "reload", "logout"])
     for (const failed of [false, true]) {
