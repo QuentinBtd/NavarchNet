@@ -85,18 +85,18 @@ test("real browser: reader binds saved source and network observations to an ing
     expect(value.network_account_id).toBe(network.id);
     expect(value.execution_enabled).toBe(false);
     expect(value.connectivity_tested).toBe(false);
-    await expect(form.getByRole("status")).toContainText(expected);
-    await expect(form.getByRole("status")).toContainText(sourceBefore.topology.id);
-    await expect(form.getByRole("status")).toContainText(networkBefore.topology.id);
-    await expect(form.getByRole("status")).toContainText("Independent saved observations");
-    await expect(form.getByRole("status")).toContainText("not a validated path");
+    await expect(form.locator(":scope > [role=status]")).toContainText(expected);
+    await expect(form.locator(":scope > [role=status]")).toContainText(sourceBefore.topology.id);
+    await expect(form.locator(":scope > [role=status]")).toContainText(networkBefore.topology.id);
+    await expect(form.locator(":scope > [role=status]")).toContainText("Independent saved observations");
+    await expect(form.locator(":scope > [role=status]")).toContainText("not a validated path");
     await expect(submit).toBeEnabled();
   }
   await account.selectOption(source.id);
-  await expect(form.getByRole("status")).not.toContainText(networkBefore.topology.id);
+  await expect(form.locator(":scope > [role=status]")).not.toContainText(networkBefore.topology.id);
   await destination.fill("203.0.113.1");
   await submit.click();
-  await expect(form.getByRole("status")).toContainText("missing_or_ambiguous_attachment");
+  await expect(form.locator(":scope > [role=status]")).toContainText("missing_or_ambiguous_attachment");
   await expect(page.locator("#aws-topology img")).toHaveCount(0);
   await expect(page.getByRole("button", { name: "Authorize metadata adoption" })).toHaveCount(0);
   expect(await (await request.get("/api/v1/snapshot", { headers })).json()).toEqual(before);

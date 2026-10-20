@@ -13,6 +13,7 @@ import type {
   Snapshot,
   TgwLookupResponse,
   TgwSourceResponse,
+  TgwTargetResponse,
   TopologyView,
   VerifiedAccount,
   VpcLookupResponse,
@@ -221,6 +222,20 @@ async function loadAwsTopology(id: string) {
           const parameters = new URLSearchParams(query);
           const result = await request<TgwSourceResponse>(
             `/aws/accounts/${encodeURIComponent(id)}/tgw-source-lookup?${parameters}`,
+          );
+          if (version !== awsViewVersion || selectedAwsAccountId !== id) return;
+          return result;
+        } catch (error) {
+          if (version !== awsViewVersion || selectedAwsAccountId !== id) return;
+          throw error;
+        }
+      },
+      onTargetLookup: async (networkAccountId, query) => {
+        if (version !== awsViewVersion || selectedAwsAccountId !== id) return;
+        try {
+          const parameters = new URLSearchParams(query);
+          const result = await request<TgwTargetResponse>(
+            `/aws/accounts/${encodeURIComponent(networkAccountId)}/tgw-target-lookup?${parameters}`,
           );
           if (version !== awsViewVersion || selectedAwsAccountId !== id) return;
           return result;

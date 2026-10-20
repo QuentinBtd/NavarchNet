@@ -1,5 +1,9 @@
 import type { AdoptionConsent, TopologyView, VerifiedAccount } from "./generated";
-import { renderSourceHandoff, type SavedSourceHandoff } from "./source-handoff-view";
+import {
+  renderSourceHandoff,
+  type SavedNetworkTargetLookup,
+  type SavedSourceHandoff,
+} from "./source-handoff-view";
 import { renderTgwLookup, type SavedLookup } from "./tgw-lookup-view";
 import { text } from "./view";
 import { renderVpcLookup, type SavedVpcLookup } from "./vpc-lookup-view";
@@ -11,6 +15,7 @@ export function renderAwsTopology(
     onLookup?: SavedLookup;
     onVpcLookup?: SavedVpcLookup;
     onSourceLookup?: SavedSourceHandoff;
+    onTargetLookup?: SavedNetworkTargetLookup;
     networkAccounts?: VerifiedAccount[];
   },
 ): HTMLElement {
@@ -89,6 +94,7 @@ export function renderAwsTopology(
                   index,
                   options.networkAccounts ?? [],
                   lookup,
+                  options.onTargetLookup,
                 ),
               );
           };

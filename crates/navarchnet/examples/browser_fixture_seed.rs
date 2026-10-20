@@ -255,6 +255,35 @@ async fn main() -> anyhow::Result<()> {
             routes.routes.push(local);
             resources.push(routes);
         } else {
+            // Target-side metadata is synthetic and does not select a traffic AZ or prove NAT health.
+            resources[3].cidrs = vec!["10.1.254.0/24".into()];
+            let mut target_subnet = resources[3].clone();
+            target_subnet.id = "subnet-browser-target-2".into();
+            target_subnet.az_id = Some("euw1-az2".into());
+            target_subnet.cidrs = vec!["10.1.253.0/24".into()];
+            resources[4].routes[0].targets =
+                [("natGatewayId".into(), "nat-browser-regional".into())].into();
+            resources[4]
+                .routes
+                .push(route("198.51.100.0/24", "blackhole", Default::default()));
+            let mut egress = AwsResource::new(
+                ResourceKind::VpcAttachment,
+                "tgw-attach-browser-egress-b".into(),
+            );
+            egress.owner_account_id = Some(account_id.into());
+            egress.vpc_id = Some("vpc-browser-b".into());
+            egress.state = Some("available".into());
+            egress.related_ids = vec![
+                "tgw-browser-b".into(),
+                resources[3].id.clone(),
+                target_subnet.id.clone(),
+            ];
+            let mut nat = AwsResource::new(ResourceKind::NatGateway, "nat-browser-regional".into());
+            nat.owner_account_id = Some(account_id.into());
+            nat.state = Some("available".into());
+            nat.availability_mode = Some("regional".into());
+            nat.connectivity_type = Some("public".into());
+            resources.extend([target_subnet, egress, nat]);
             let mut ingress = AwsResource::new(
                 ResourceKind::VpcAttachment,
                 "tgw-attach-browser-source".into(),

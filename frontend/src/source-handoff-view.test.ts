@@ -1,6 +1,6 @@
 import { expect, it, vi } from "vitest";
-import type { RouteTableSelection, TgwSourceResponse } from "./generated";
-import { renderSourceHandoff } from "./source-handoff-view";
+import type { RouteTableSelection, TgwSourceResponse, TgwTargetResponse } from "./generated";
+import { renderSourceHandoff, type SavedNetworkTargetLookup } from "./source-handoff-view";
 
 // Renderer-only malformed/deferred HTTP fixtures, not backend/AWS acceptance.
 const selection: RouteTableSelection = {
@@ -46,7 +46,10 @@ const value: TgwSourceResponse = {
     },
   },
 };
-function render(lookup = async () => value as TgwSourceResponse | undefined) {
+function render(
+  lookup = async () => value as TgwSourceResponse | undefined,
+  lookupTarget?: SavedNetworkTargetLookup,
+) {
   const form = renderSourceHandoff(
     "source-snapshot",
     "subnet-source",
@@ -57,6 +60,7 @@ function render(lookup = async () => value as TgwSourceResponse | undefined) {
       { id: "other", name: "Other", region: "eu-west-1" },
     ],
     lookup,
+    lookupTarget,
   );
   const select = form.querySelector("select");
   const input = form.querySelector("input");
@@ -93,7 +97,15 @@ it("shows both independent snapshots and inert candidate metadata without a vali
   expect(form.querySelector("img")).toBeNull();
 });
 it("rejects mismatched scopes, omitted/non-false flags and inconsistent source/gateway evidence", async () => {
+  const source = value.result.source,
+    handoff = value.result.handoff;
+  if (source.status !== "reported" || handoff.status !== "reported_candidate") throw new Error("Bad fixture");
   for (const body of [
+    { ...value, result: { ...value.result, source: { ...source, source: "explicit_subnet" } } },
+    { ...value, result: { ...value.result, source: { status: "future" } } },
+    { ...value, result: { ...value.result, source: { ...source, lookup: { status: "future" } } } },
+    { ...value, result: { ...value.result, handoff: { status: "future" } } },
+    { ...value, result: { ...value.result, handoff: { ...handoff, lookup: { status: "future" } } } },
     { ...value, network_account_id: "other" },
     { ...value, subnet_id: "other" },
     { ...value, destination: "other" },
@@ -150,6 +162,57 @@ it("clears old results on input changes and discards a pending result after netw
   await finished(next);
   next.querySelector("input")?.dispatchEvent(new Event("input"));
   expect(status(next)).not.toContain("network-snapshot");
+});
+it("source resubmit and network/destination changes retire a pending target panel without a mixed result", async () => {
+  for (const change of ["resubmit", "network", "destination"]) {
+    let resolve!: (value: TgwTargetResponse) => void;
+    const pending = new Promise<TgwTargetResponse>((done) => {
+      resolve = done;
+    });
+    const callback = vi.fn(() => pending);
+    const form = render(undefined, callback);
+    submit(form);
+    await finished(form);
+    expect(form.checkValidity()).toBe(true);
+    const target = form.querySelector<HTMLFieldSetElement>("fieldset[data-target-entries]");
+    const choice = target?.querySelector("select");
+    if (!target || !choice) throw new Error("Target panel missing");
+    choice.value = "egress";
+    target.querySelector("button")?.click();
+    expect(callback).toHaveBeenCalledTimes(1);
+    if (change === "resubmit") {
+      submit(form);
+      await finished(form);
+    } else if (change === "network") {
+      const select = form.querySelector("select");
+      if (!select) throw new Error("Network choice missing");
+      select.value = "other";
+      select.dispatchEvent(new Event("change"));
+    } else {
+      const input = form.querySelector("input");
+      if (!input) throw new Error("Destination missing");
+      input.value = "203.0.113.8";
+      input.dispatchEvent(new Event("input"));
+    }
+    resolve({
+      topology_id: "network-snapshot",
+      completed_at: "4",
+      transit_gateway_id: "tgw-network",
+      target_attachment_id: "egress",
+      destination: "203.0.113.1",
+      az_selection: "not_inferred",
+      execution_enabled: false,
+      connectivity_tested: false,
+      result: { status: "unresolved", reason: "attachment_subnet_unresolved" },
+    });
+    await expect
+      .poll(() => target.querySelector('[role="status"]')?.textContent)
+      .not.toContain("Reading saved");
+    expect(target.parentElement).toBeNull();
+    expect(form.textContent).not.toContain("Target scope unresolved: attachment_subnet_unresolved");
+    target.querySelector("button")?.click();
+    expect(callback).toHaveBeenCalledTimes(1);
+  }
 });
 it("does not submit an absent account selection", () => {
   const callback = vi.fn(async () => value);

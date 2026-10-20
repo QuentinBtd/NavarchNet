@@ -3,12 +3,19 @@ import type {
   TgwLookupResult,
   TgwSourceRequest,
   TgwSourceResponse,
+  TgwTargetRequest,
+  TgwTargetResponse,
   VerifiedAccount,
   VpcSubnetLookupResult,
 } from "./generated";
+import { renderTargetEntries } from "./target-entries-view";
 import { text } from "./view";
 
 export type SavedSourceHandoff = (query: TgwSourceRequest) => Promise<TgwSourceResponse | undefined>;
+export type SavedNetworkTargetLookup = (
+  networkAccountId: string,
+  query: TgwTargetRequest,
+) => Promise<TgwTargetResponse | undefined>;
 const scopeError = "Lookup response did not match the requested saved source/network scope";
 const caveat =
   "Independent saved observations, not a validated path. Target health, attachment-subnet/return routes and connectivity remain untested.";
@@ -72,6 +79,7 @@ export function renderSourceHandoff(
   index: number,
   accounts: Pick<VerifiedAccount, "id" | "name" | "region">[],
   lookup: SavedSourceHandoff,
+  lookupTarget?: SavedNetworkTargetLookup,
 ): HTMLFormElement {
   const form = document.createElement("form");
   form.dataset.sourceHandoff = subnetId;
@@ -102,8 +110,11 @@ export function renderSourceHandoff(
   output.setAttribute("aria-live", "polite");
   form.append(networkLabel, network, label, input, submit, output);
   let generation = 0;
+  let target: HTMLFieldSetElement | undefined;
   const changed = () => {
     generation++;
+    target?.remove();
+    target = undefined;
     output.textContent = `Inputs changed; run another saved lookup. ${caveat}`;
   };
   input.oninput = changed;
@@ -116,7 +127,9 @@ export function renderSourceHandoff(
       return;
     }
     const query = { network_account_id: network.value, subnet_id: subnetId, destination: input.value };
-    const version = generation;
+    const version = ++generation;
+    target?.remove();
+    target = undefined;
     const current = () =>
       version === generation &&
       network.value === query.network_account_id &&
@@ -168,6 +181,25 @@ export function renderSourceHandoff(
             throw new Error(scopeError);
         }
         output.textContent = `${description}. ${detail}. Source observation ${topologyId}, completed ${value.source_completed_at}; network observation ${value.network_topology_id}, completed ${value.network_completed_at}. ${caveat}`;
+        if (
+          lookupTarget &&
+          handoff.status === "reported_candidate" &&
+          handoff.lookup.status === "reported_forward"
+        ) {
+          target = renderTargetEntries(
+            {
+              topologyId: value.network_topology_id,
+              completedAt: value.network_completed_at,
+              gatewayId: handoff.transit_gateway_id,
+              attachmentIds: handoff.lookup.attachment_ids,
+              destination: query.destination,
+            },
+            index,
+            (targetQuery) => lookupTarget(value.network_account_id, targetQuery),
+            current,
+          );
+          form.append(target);
+        }
       } catch (error) {
         output.textContent = current()
           ? `${error instanceof Error ? error.message : "Saved ingress lookup failed"}. ${caveat}`
