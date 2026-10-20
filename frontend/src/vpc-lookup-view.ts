@@ -1,4 +1,5 @@
 import type { RouteTableSelection, VpcLookupRequest, VpcLookupResponse, VpcRouteTarget } from "./generated";
+import { type NatReferenceParent, renderNatReference } from "./nat-reference-view";
 import { text } from "./view";
 
 export type SavedVpcLookup = (query: VpcLookupRequest) => Promise<VpcLookupResponse | undefined>;
@@ -24,6 +25,7 @@ export function renderVpcLookup(
   selection: RouteTableSelection,
   index: number,
   lookup: SavedVpcLookup,
+  natReference?: NatReferenceParent,
 ): HTMLFormElement {
   const form = document.createElement("form");
   form.dataset.vpcRouteLookup = subnetId;
@@ -42,18 +44,29 @@ export function renderVpcLookup(
   output.setAttribute("aria-live", "polite");
   form.append(label, input, submit, output);
   let generation = 0;
+  let child: HTMLFieldSetElement | undefined;
+  const retireChild = () => {
+    child?.remove();
+    child?.replaceChildren();
+    child = undefined;
+  };
   const changed = () => {
     generation++;
+    retireChild();
     submit.disabled = input.disabled = false;
     output.textContent = `Inputs changed; run another saved lookup. ${caveat}`;
   };
   input.oninput = input.onchange = changed;
   form.onsubmit = (event) => {
     event.preventDefault();
-    if (submit.disabled) return;
+    if (submit.disabled || (natReference && !natReference.isCurrent())) return;
     const query = { subnet_id: subnetId, destination: input.value };
     const version = ++generation;
-    const current = () => version === generation && input.value === query.destination;
+    retireChild();
+    const current = () =>
+      version === generation &&
+      input.value === query.destination &&
+      (!natReference || natReference.isCurrent());
     submit.disabled = true;
     input.disabled = true;
     output.textContent = "Reading saved subnet observation…";
@@ -114,6 +127,16 @@ export function renderVpcLookup(
             throw new Error(scopeError);
         }
         output.textContent = `${description}. ${caveat}`;
+        if (
+          natReference &&
+          result.status === "reported" &&
+          result.lookup.status === "reported_route" &&
+          result.lookup.target.kind === "nat_gateway"
+        ) {
+          if (natReference.snapshot.id !== topologyId) throw new Error(scopeError);
+          child = renderNatReference(natReference, query, result, current);
+          form.append(child);
+        }
       } catch (error) {
         if (current())
           output.textContent = error instanceof Error ? error.message : "Saved subnet lookup failed";

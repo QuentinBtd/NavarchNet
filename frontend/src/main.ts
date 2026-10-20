@@ -5,6 +5,7 @@ import type {
   ConnectionRequest,
   Fault,
   Inventory,
+  NatReferenceResponse,
   Observation,
   Operation,
   Plan,
@@ -189,12 +190,29 @@ function renderOperations(operations: Operation[]) {
 async function loadAwsTopology(id: string) {
   selectedAwsAccountId = id;
   const version = ++awsViewVersion;
+  element("aws-topology").replaceChildren();
   const view = await request<TopologyView>(`/aws/accounts/${encodeURIComponent(id)}/topology`);
   // Selection changes, like logout, must not let an older response replace the visible account.
   if (version !== awsViewVersion || selectedAwsAccountId !== id) return;
+  if (view.topology.account_id !== id) throw new Error("Saved observation account did not match selection");
   element("aws-topology").replaceChildren(
     renderAwsTopology(view, {
       networkAccounts: snapshot?.aws_accounts ?? [],
+      isCurrent: () => version === awsViewVersion && selectedAwsAccountId === id,
+      onNatReferenceLookup: async (query) => {
+        if (version !== awsViewVersion || selectedAwsAccountId !== id) return;
+        try {
+          const parameters = new URLSearchParams(query);
+          const result = await request<NatReferenceResponse>(
+            `/aws/accounts/${encodeURIComponent(id)}/nat-reference-lookup?${parameters}`,
+          );
+          if (version !== awsViewVersion || selectedAwsAccountId !== id) return;
+          return result;
+        } catch (error) {
+          if (version !== awsViewVersion || selectedAwsAccountId !== id) return;
+          throw error;
+        }
+      },
       get canConsent() {
         return isAdmin() && !!snapshot?.aws_read_only_enabled;
       },
@@ -285,6 +303,7 @@ function renderAwsAccounts() {
           if (!snapshot?.aws_read_only_enabled) throw new Error("AWS read-only access is disabled");
           selectedAwsAccountId = account.id;
           ++awsViewVersion;
+          element("aws-topology").replaceChildren();
           await request(`/aws/accounts/${encodeURIComponent(account.id)}/discover`, {});
           if (selectedAwsAccountId === account.id) await loadAwsTopology(account.id);
           await refresh();

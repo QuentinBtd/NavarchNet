@@ -1,5 +1,6 @@
 import type { AdoptionConsent, TopologyView, VerifiedAccount } from "./generated";
 import { renderNatMetadata } from "./nat-metadata-view";
+import type { SavedNatReferenceLookup } from "./nat-reference-view";
 import {
   renderSourceHandoff,
   type SavedNetworkTargetLookup,
@@ -15,6 +16,8 @@ export function renderAwsTopology(
     onConsent: (consent: AdoptionConsent) => Promise<void>;
     onLookup?: SavedLookup;
     onVpcLookup?: SavedVpcLookup;
+    onNatReferenceLookup?: SavedNatReferenceLookup;
+    isCurrent?: () => boolean;
     onSourceLookup?: SavedSourceHandoff;
     onTargetLookup?: SavedNetworkTargetLookup;
     networkAccounts?: VerifiedAccount[];
@@ -79,7 +82,30 @@ export function renderAwsTopology(
             ),
           );
         if (selection && options.onVpcLookup)
-          row.append(renderVpcLookup(topology.id, resource.id, selection, index, options.onVpcLookup));
+          row.append(
+            renderVpcLookup(
+              topology.id,
+              resource.id,
+              selection,
+              index,
+              options.onVpcLookup,
+              options.onNatReferenceLookup && options.isCurrent
+                ? {
+                    snapshot: {
+                      id: topology.id,
+                      account_id: topology.account_id,
+                      aws_account_id: topology.aws_account_id,
+                      completed_at: topology.completed_at,
+                      execution_enabled: topology.execution_enabled,
+                      connectivity_tested: topology.connectivity_tested,
+                    },
+                    subnetVpcId: resource.vpc_id,
+                    lookup: options.onNatReferenceLookup,
+                    isCurrent: options.isCurrent,
+                  }
+                : undefined,
+            ),
+          );
         if (selection && options.onSourceLookup) {
           const lookup = options.onSourceLookup;
           const detail = document.createElement("details");

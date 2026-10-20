@@ -31,13 +31,20 @@ function metadataShape(value: unknown): value is NatGatewayMetadata {
   );
 }
 
-export function renderNatMetadata(resource: AwsResource, topology: AwsTopology): HTMLDetailsElement {
+export type SavedNatSnapshot = Readonly<
+  Pick<AwsTopology, "id" | "completed_at" | "execution_enabled" | "connectivity_tested">
+>;
+export function renderNatMetadata(
+  resource: AwsResource,
+  topology: SavedNatSnapshot,
+  isCurrent: () => boolean = () => true,
+): HTMLDetailsElement {
   const detail = document.createElement("details");
   detail.dataset.natMetadata = resource.id;
   detail.append(text("summary", "Inspect reported NAT metadata"));
   let loaded = false;
   detail.ontoggle = () => {
-    if (!detail.open || loaded) return;
+    if (!isCurrent() || !detail.open || loaded) return;
     loaded = true;
     if (
       topology.execution_enabled !== false ||
@@ -88,6 +95,7 @@ export function renderNatMetadata(resource: AwsResource, topology: AwsTopology):
     more.dataset.natMore = "";
     let shown = 0;
     function appendBatch() {
+      if (!isCurrent()) return;
       for (const address of addresses.slice(shown, shown + 50)) {
         const row = document.createElement("li");
         row.dataset.natAddress = "";

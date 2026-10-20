@@ -1,5 +1,6 @@
 import { afterEach, expect, it, vi } from "vitest";
 import type {
+  NatReferenceResponse,
   Snapshot,
   TgwLookupResponse,
   TgwSourceResponse,
@@ -34,6 +35,171 @@ const snapshot: Snapshot = {
   aws_regions: [],
 };
 const response = (body: unknown) => new Response(JSON.stringify(body), { status: 200 });
+function natReply(): NatReferenceResponse {
+  const resource = topology("account-a").topology.resources[0];
+  if (!resource) throw new Error("Missing fixture");
+  return {
+    account_id: "account-a",
+    topology_id: "snapshot-account-a",
+    completed_at: "2",
+    subnet_id: "subnet-account-a",
+    destination: "203.0.113.1",
+    reference_only: true,
+    execution_enabled: false,
+    connectivity_tested: false,
+    result: {
+      subnet_lookup: {
+        status: "reported",
+        route_table_id: "rtb-account-a",
+        source: "implicit_main",
+        lookup: {
+          status: "reported_route",
+          destination_cidr: "0.0.0.0/0",
+          origin: "CreateRoute",
+          target: { kind: "nat_gateway", id: "nat-reference-old" },
+        },
+      },
+      reference: {
+        status: "reported_record",
+        owner_scope: "not_reported",
+        vpc_scope: "not_reported",
+        resource: { ...resource, kind: "nat_gateway", id: "nat-reference-old" },
+      },
+    },
+  };
+}
+async function startNatReference() {
+  select("account-a");
+  await vi.waitFor(() => expect(document.querySelector("form[data-vpc-route-lookup]")).not.toBeNull());
+  const form = document.querySelector<HTMLFormElement>("form[data-vpc-route-lookup]");
+  const input = form?.querySelector<HTMLInputElement>("input");
+  if (!form || !input) throw new Error("Missing parent form");
+  input.value = "203.0.113.1";
+  form.dispatchEvent(new Event("submit", { cancelable: true }));
+  await vi.waitFor(() => expect(form.querySelector("fieldset[data-nat-reference]")).not.toBeNull());
+  const panel = form.querySelector<HTMLFieldSetElement>("fieldset[data-nat-reference]");
+  const action = panel?.querySelector<HTMLButtonElement>("button");
+  if (!panel || !action) throw new Error("Missing NAT control");
+  action.click();
+  return { form, panel, action };
+}
+function natVpcResponse() {
+  const nat = natReply();
+  return {
+    topology_id: nat.topology_id,
+    subnet_id: nat.subnet_id,
+    destination: nat.destination,
+    result: nat.result.subnet_lookup,
+    execution_enabled: false,
+    connectivity_tested: false,
+  };
+}
+it("retires completed NAT evidence immediately while an authorized discovery refresh is pending", async () => {
+  // Deferred fetch fixture only: no SDK, server, credentials or cloud request.
+  const discovery = deferred();
+  let calls = 0;
+  await boot(
+    async (path) => {
+      if (path.endsWith("/discover")) return discovery.promise;
+      if (path.includes("nat-reference-lookup")) {
+        calls++;
+        return response(natReply());
+      }
+      if (path.includes("vpc-route-lookup")) return response(natVpcResponse());
+      return response(vpcTopology("account-a"));
+    },
+    { ...snapshot, role: "admin", aws_read_only_enabled: true },
+  );
+  const old = await startNatReference();
+  await vi.waitFor(() => expect(old.panel.textContent).toContain("Referenced saved NAT record:"));
+  const row = [...document.querySelectorAll("#aws-account-list li")].find((node) =>
+    node.textContent?.includes("Fixture account-a"),
+  );
+  const refresh = row?.querySelectorAll<HTMLButtonElement>("button")[1];
+  if (!refresh) throw new Error("Missing discovery refresh");
+  refresh.click();
+  expect(document.querySelector("#aws-topology")?.childElementCount).toBe(0);
+  old.action.click();
+  old.form.dispatchEvent(new Event("submit", { cancelable: true }));
+  expect(calls).toBe(1);
+  discovery.resolve(response({}));
+  await vi.waitFor(() =>
+    expect(document.querySelector("#aws-topology")?.textContent).toContain("subnet-account-a"),
+  );
+});
+it("retires completed NAT evidence immediately while replacement account topology is pending", async () => {
+  const replacement = deferred();
+  const calls: string[] = [];
+  await boot(async (path) => {
+    if (path.includes("nat-reference-lookup")) {
+      calls.push(path);
+      return response(natReply());
+    }
+    if (path.includes("vpc-route-lookup")) return response(natVpcResponse());
+    if (path.includes("account-b")) return replacement.promise;
+    return response(vpcTopology("account-a"));
+  });
+  const old = await startNatReference();
+  await vi.waitFor(() => expect(old.panel.textContent).toContain("Referenced saved NAT record:"));
+  select("account-b");
+  expect(document.querySelector("#aws-topology")?.childElementCount).toBe(0);
+  old.action.click();
+  old.form.dispatchEvent(new Event("submit", { cancelable: true }));
+  expect(calls).toHaveLength(1);
+  replacement.resolve(response(vpcTopology("account-b")));
+  await vi.waitFor(() =>
+    expect(document.querySelector("#aws-topology")?.textContent).toContain("subnet-account-b"),
+  );
+});
+it("fences pending NAT reads and retained parent/child/lazy handlers across account ABA, reload and logout", async () => {
+  for (const retirement of ["switch", "ABA", "reload", "logout"])
+    for (const failed of [false, true]) {
+      const pending = deferred();
+      const calls: string[] = [];
+      await boot(async (path) => {
+        if (path.includes("nat-reference-lookup")) {
+          calls.push(path);
+          return pending.promise;
+        }
+        if (path.includes("vpc-route-lookup")) return response(natVpcResponse());
+        return response(vpcTopology(path.includes("account-a") ? "account-a" : "account-b"));
+      });
+      const old = await startNatReference();
+      expect(calls).toEqual([
+        "/api/v1/aws/accounts/account-a/nat-reference-lookup?subnet_id=subnet-account-a&destination=203.0.113.1",
+      ]);
+      if (retirement === "logout") document.querySelector<HTMLButtonElement>("#logout")?.click();
+      else {
+        select(retirement === "reload" ? "account-a" : "account-b");
+        await vi.waitFor(() =>
+          expect(document.querySelector("#aws-topology")?.textContent).toContain(
+            retirement === "reload" ? "subnet-account-a" : "subnet-account-b",
+          ),
+        );
+        if (retirement === "ABA") {
+          select("account-a");
+          await vi.waitFor(() =>
+            expect(document.querySelector("#aws-topology")?.textContent).toContain("subnet-account-a"),
+          );
+        }
+      }
+      old.action.disabled = false;
+      old.action.click();
+      old.form.dispatchEvent(new Event("submit", { cancelable: true }));
+      expect(calls).toHaveLength(1);
+      pending.resolve(
+        failed
+          ? new Response(JSON.stringify({ error: "obsolete failure" }), { status: 500 })
+          : response(natReply()),
+      );
+      await new Promise((done) => setTimeout(done, 0));
+      expect(old.panel.querySelector("details")).toBeNull();
+      expect(document.querySelector("#aws-topology")?.textContent).not.toContain("nat-reference-old");
+      expect(document.querySelector("#aws-topology")?.textContent).not.toContain("obsolete failure");
+      vi.unstubAllGlobals();
+      document.body.replaceChildren();
+    }
+});
 function topology(id: string): TopologyView {
   return {
     topology: {
@@ -99,14 +265,14 @@ function deferred() {
   });
   return { promise, resolve };
 }
-async function boot(handler: (path: string) => Promise<Response>) {
+async function boot(handler: (path: string) => Promise<Response>, state: Snapshot = snapshot) {
   vi.resetModules();
   document.body.innerHTML = '<div id="app"></div>';
   vi.stubGlobal(
     "fetch",
     vi.fn((input: RequestInfo | URL) => {
       const path = String(input);
-      return path === "/api/v1/snapshot" ? Promise.resolve(response(snapshot)) : handler(path);
+      return path === "/api/v1/snapshot" ? Promise.resolve(response(state)) : handler(path);
     }),
   );
   await import("./main");
