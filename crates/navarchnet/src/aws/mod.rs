@@ -8,6 +8,7 @@ pub mod route_lookup;
 pub mod routing;
 pub mod service;
 pub mod session;
+pub mod source_handoff;
 pub mod vpc_lookup;
 use anyhow::{Context, ensure};
 use serde::{Deserialize, Serialize};

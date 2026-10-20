@@ -1,6 +1,9 @@
 use navarchnet::{
     api::*,
-    aws::{ingress_lookup::*, observation::*, route_lookup::*, routing::*, vpc_lookup::*, *},
+    aws::{
+        ingress_lookup::*, observation::*, route_lookup::*, routing::*, source_handoff::*,
+        vpc_lookup::*, *,
+    },
     domain::*,
 };
 use ts_rs::{Config, TS};
@@ -53,6 +56,11 @@ fn main() {
         VpcRouteTarget,
         VpcLookupResult,
         VpcSubnetLookupResult,
+        TgwSourceRequest,
+        TgwSourceResponse,
+        SourceHandoffLookup,
+        SourceHandoffResult,
+        SourceHandoffReason,
         SubnetRouteTable,
         RouteTableSelection,
         RouteSelectionReason,

@@ -35,6 +35,10 @@ Official Docker Hub API tag records were read before pinning multi-architecture 
 
 GitHub action tag refs were resolved from their actual primary repositories with `git ls-remote` before copying full SHAs into CI: checkout v6, setup-node v6, rust-cache v2 and upload-artifact v4. No mutable action tag is used in the workflow.
 
+## Source-subnet to TGW ingress candidate — October 20, 2026
+
+Official https://docs.aws.amazon.com/vpc/latest/tgw/tgw-vpc-attachments.html and https://docs.aws.amazon.com/AWSEC2/latest/APIReference/API_TransitGatewayVpcAttachment.html were rechecked and retained in `persistent-migration/source-handoff-primary-sources.json`. Attachments declare VPC ownership, gateway and subnet references; AZ attachment presence is necessary but not sufficient for routing, attachment-subnet route tables and return paths remain separate, and IPv6-only attachment subnets are unsupported. The offline composition therefore reports only an AZ-matched ingress candidate over independent saved observations, never proven forwarding. Standard AZ IDs are compared without translating account-specific names or Local Zone parents. Actual XML names `subnetIds`, `vpcOwnerId` and `transitGatewayId` were cross-checked against cached pinned aws-sdk-ec2 1.268.0 `protocol_serde/shape_transit_gateway_vpc_attachment.rs`; that source inspection is not a successful generated EC2 build or live API acceptance.
+
 ## VPC saved-subnet route lookup — October 20, 2026
 
 Rechecked the following official pages through the browser. These are interpretation rules for stored observations, not live AWS acceptance. Captures/decisions are retained in the mission's `persistent-migration/vpc-route-primary-sources.json`.

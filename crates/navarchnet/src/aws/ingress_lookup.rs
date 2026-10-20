@@ -63,14 +63,12 @@ pub fn lookup(topology: &AwsTopology, ingress: &str, destination: &str) -> TgwIn
         let [parent] = parents.as_slice() else {
             return Err(MissingOrAmbiguousGateway);
         };
-        // VPC attachment related IDs also contain subnets, but never a second gateway.
-        if attachment
+        // Bind the observed parent to the unique declared TGW reference, not a subnet ID.
+        let mut gateways = attachment
             .related_ids
             .iter()
-            .filter(|id| id.starts_with("tgw-"))
-            .count()
-            != 1
-        {
+            .filter(|id| id.starts_with("tgw-"));
+        if gateways.next() != Some(&parent.id) || gateways.next().is_some() {
             return Err(MissingOrAmbiguousGateway);
         }
         if parent.owner_account_id.as_deref() != Some(topology.aws_account_id.as_str()) {
@@ -207,6 +205,21 @@ mod tests {
         }
     }
 
+    #[test]
+    fn requires_declared_gateway_identity_not_a_gateway_kind_record_for_a_related_subnet() {
+        let mut topology = fixture();
+        topology.resources[0].id = "subnet-attachment".into();
+        topology.resources[1]
+            .related_ids
+            .push("subnet-attachment".into());
+        topology.resources[2].related_ids = vec!["subnet-attachment".into()];
+        assert_eq!(
+            lookup(&topology, "ingress", "203.0.113.1"),
+            TgwIngressResult::Unresolved {
+                reason: TgwIngressReason::MissingOrAmbiguousGateway
+            }
+        );
+    }
     #[test]
     fn selection_uses_association_not_propagation_and_does_not_mutate_observations() {
         let mut topology = fixture();

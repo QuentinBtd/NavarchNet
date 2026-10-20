@@ -104,6 +104,26 @@ pub struct VpcLookupResponse {
     pub execution_enabled: bool,
     pub connectivity_tested: bool,
 }
+#[derive(Deserialize, TS)]
+#[serde(deny_unknown_fields)]
+pub struct TgwSourceRequest {
+    pub network_account_id: String,
+    pub subnet_id: String,
+    pub destination: String,
+}
+#[derive(Serialize, TS)]
+pub struct TgwSourceResponse {
+    pub source_topology_id: String,
+    pub network_topology_id: String,
+    pub source_completed_at: String,
+    pub network_completed_at: String,
+    pub network_account_id: String,
+    pub subnet_id: String,
+    pub destination: String,
+    pub result: aws::source_handoff::SourceHandoffLookup,
+    pub execution_enabled: bool,
+    pub connectivity_tested: bool,
+}
 impl From<anyhow::Error> for Failure {
     fn from(e: anyhow::Error) -> Self {
         Self(e)
@@ -141,6 +161,10 @@ pub fn router(state: AppState) -> Router {
         )
         .route("/aws/accounts/{id}/adoptions", post(adopt_aws))
         .route("/aws/accounts/{id}/vpc-route-lookup", get(lookup_aws_vpc))
+        .route(
+            "/aws/accounts/{id}/tgw-source-lookup",
+            get(lookup_aws_source),
+        )
         .route("/networks", post(create_network))
         .route("/plans", post(create_plan))
         .route("/plans/{id}/apply", post(apply))
@@ -272,6 +296,39 @@ async fn lookup_aws_vpc(
     let result = aws::vpc_lookup::lookup(&view.topology, &query.subnet_id, &query.destination);
     Ok(Json(VpcLookupResponse {
         topology_id: view.topology.id,
+        subnet_id: query.subnet_id,
+        destination: query.destination,
+        result,
+        execution_enabled: false,
+        connectivity_tested: false,
+    }))
+}
+async fn lookup_aws_source(
+    State(s): State<AppState>,
+    Path(id): Path<String>,
+    Query(query): Query<TgwSourceRequest>,
+) -> Result<Json<TgwSourceResponse>, Failure> {
+    if query.network_account_id.len() > 2048
+        || query.subnet_id.len() > 2048
+        || query.destination.len() > 64
+    {
+        return Err(anyhow::anyhow!("Source handoff input exceeds its bound").into());
+    }
+    // These are independent saved reads, not a simultaneous cloud snapshot or a probe.
+    let source = s.store.aws_topology(&id).await?.topology;
+    let network = s
+        .store
+        .aws_topology(&query.network_account_id)
+        .await?
+        .topology;
+    let result =
+        aws::source_handoff::lookup(&source, &network, &query.subnet_id, &query.destination);
+    Ok(Json(TgwSourceResponse {
+        source_topology_id: source.id,
+        network_topology_id: network.id,
+        source_completed_at: source.completed_at,
+        network_completed_at: network.completed_at,
+        network_account_id: query.network_account_id,
         subnet_id: query.subnet_id,
         destination: query.destination,
         result,
