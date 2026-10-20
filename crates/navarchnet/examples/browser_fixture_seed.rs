@@ -146,6 +146,52 @@ async fn main() -> anyhow::Result<()> {
                 attachments: vec![],
             },
         ]);
+        let mut vpc = AwsResource::new(ResourceKind::Vpc, format!("vpc-browser-{suffix}"));
+        vpc.owner_account_id = Some(account_id.into());
+        vpc.state = Some("available".into());
+        vpc.cidrs.push("10.1.0.0/16".into());
+        let mut subnet = AwsResource::new(ResourceKind::Subnet, format!("subnet-browser-{suffix}"));
+        subnet.owner_account_id = Some(account_id.into());
+        subnet.vpc_id = Some(vpc.id.clone());
+        subnet.state = Some("available".into());
+        subnet.az_id = Some("euw1-az1".into());
+        subnet
+            .tags
+            .insert("Name".into(), "Application subnet <img src=x>".into());
+        let mut vpc_table =
+            AwsResource::new(ResourceKind::RouteTable, format!("rtb-browser-{suffix}"));
+        vpc_table.owner_account_id = Some(account_id.into());
+        vpc_table.vpc_id = Some(vpc.id.clone());
+        vpc_table.associations.push(RouteAssociation {
+            id: Some(format!("rtbassoc-browser-{suffix}")),
+            main: true,
+            subnet_id: None,
+            gateway_id: None,
+            state: Some("associated".into()),
+        });
+        let route = |cidr: &str, state: &str, targets| ObservedRoute {
+            ipv4_destination: Some(cidr.into()),
+            ipv6_destination: None,
+            prefix_list_destination: None,
+            state: Some(state.into()),
+            origin: Some("CreateRoute".into()),
+            targets,
+        };
+        let mut local = route(
+            "10.1.0.0/16",
+            "active",
+            [("gatewayId".into(), "local".into())].into(),
+        );
+        local.origin = Some("CreateRouteTable".into());
+        vpc_table.routes = vec![
+            route(
+                "0.0.0.0/0",
+                "active",
+                [("transitGatewayId".into(), parent.id.clone())].into(),
+            ),
+            route("10.2.0.0/16", "blackhole", Default::default()),
+            local,
+        ];
         let topology = AwsTopology {
             id: uuid::Uuid::new_v4().to_string(),
             account_id: account.id,
@@ -154,7 +200,7 @@ async fn main() -> anyhow::Result<()> {
             started_at: "1".into(),
             completed_at: "2".into(),
             session_name: "offline-fixture-no-sdk".into(),
-            resources: vec![parent, table],
+            resources: vec![parent, table, vpc, subnet, vpc_table],
             request_ids: vec!["offline-browser-fixture".into()],
             complete_for_supported_queries: true,
             limitations: vec![

@@ -14,6 +14,7 @@ import type {
   TgwLookupResponse,
   TopologyView,
   VerifiedAccount,
+  VpcLookupResponse,
 } from "./generated";
 import { Session } from "./session";
 import { operationLabel, renderObservation, text } from "./view";
@@ -204,6 +205,20 @@ async function loadAwsTopology(id: string) {
           const parameters = new URLSearchParams(query);
           const result = await request<TgwLookupResponse>(
             `/aws/accounts/${encodeURIComponent(id)}/tgw-route-lookup?${parameters}`,
+          );
+          if (version !== awsViewVersion || selectedAwsAccountId !== id) return;
+          return result;
+        } catch (error) {
+          if (version !== awsViewVersion || selectedAwsAccountId !== id) return;
+          throw error;
+        }
+      },
+      onVpcLookup: async (query) => {
+        if (version !== awsViewVersion || selectedAwsAccountId !== id) return;
+        try {
+          const parameters = new URLSearchParams(query);
+          const result = await request<VpcLookupResponse>(
+            `/aws/accounts/${encodeURIComponent(id)}/vpc-route-lookup?${parameters}`,
           );
           if (version !== awsViewVersion || selectedAwsAccountId !== id) return;
           return result;

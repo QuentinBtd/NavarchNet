@@ -1,12 +1,14 @@
 import type { AdoptionConsent, TopologyView } from "./generated";
 import { renderTgwLookup, type SavedLookup } from "./tgw-lookup-view";
 import { text } from "./view";
+import { renderVpcLookup, type SavedVpcLookup } from "./vpc-lookup-view";
 export function renderAwsTopology(
   view: TopologyView,
   options: {
     canConsent: boolean;
     onConsent: (consent: AdoptionConsent) => Promise<void>;
     onLookup?: SavedLookup;
+    onVpcLookup?: SavedVpcLookup;
   },
 ): HTMLElement {
   const root = document.createElement("section");
@@ -67,6 +69,8 @@ export function renderAwsTopology(
                 : `${resource.id} · table selection unresolved: ${selection.reason}`,
             ),
           );
+        if (selection && options.onVpcLookup)
+          row.append(renderVpcLookup(topology.id, resource.id, selection, index, options.onVpcLookup));
         if (resource.public_ips.length)
           row.append(text("p", `Reported public IPs: ${resource.public_ips.join(", ")}`));
         if (resource.availability_mode)

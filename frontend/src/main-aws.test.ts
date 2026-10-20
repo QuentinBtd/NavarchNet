@@ -1,5 +1,11 @@
 import { afterEach, expect, it, vi } from "vitest";
-import type { Snapshot, TgwLookupResponse, TopologyView, VerifiedAccount } from "./generated";
+import type {
+  Snapshot,
+  TgwLookupResponse,
+  TopologyView,
+  VerifiedAccount,
+  VpcLookupResponse,
+} from "./generated";
 
 // Deferred credential-free HTTP responses through the real main.ts/session/renderer integration.
 // Fetch intentionally ignores abort so generation/account checks must still protect the view.
@@ -121,6 +127,72 @@ function startLookup() {
   if (!form || !input) throw new Error("Saved lookup input missing");
   input.value = "203.0.113.1";
   form.dispatchEvent(new Event("submit", { cancelable: true }));
+}
+function vpcTopology(id: string): TopologyView {
+  const view = topology(id);
+  const row = view.topology.resources[0];
+  if (!row) throw new Error("Fixture resource missing");
+  view.topology.resources.push({ ...row, kind: "subnet", id: `subnet-${id}`, vpc_id: `vpc-${id}` });
+  view.subnet_route_tables.push({
+    subnet_id: `subnet-${id}`,
+    vpc_id: `vpc-${id}`,
+    selection: { status: "selected", route_table_id: `rtb-${id}`, source: "implicit_main" },
+  });
+  return view;
+}
+for (const change of ["account switch", "logout"] as const) {
+  it(`late saved VPC lookup is discarded after ${change} even if fetch ignores abort`, async () => {
+    const old = deferred();
+    const calls: string[] = [];
+    await boot(async (path) => {
+      if (path.includes("vpc-route-lookup")) {
+        calls.push(path);
+        return old.promise;
+      }
+      return response(vpcTopology(path.includes("account-a") ? "account-a" : "account-b"));
+    });
+    select("account-a");
+    await vi.waitFor(() => expect(document.querySelector("form[data-vpc-route-lookup]")).not.toBeNull());
+    const form = document.querySelector<HTMLFormElement>("form[data-vpc-route-lookup]");
+    const input = form?.querySelector<HTMLInputElement>("input");
+    if (!form || !input) throw new Error("VPC lookup input missing");
+    input.value = "203.0.113.1";
+    form.dispatchEvent(new Event("submit", { cancelable: true }));
+    expect(calls).toEqual([
+      "/api/v1/aws/accounts/account-a/vpc-route-lookup?subnet_id=subnet-account-a&destination=203.0.113.1",
+    ]);
+    if (change === "account switch") {
+      select("account-b");
+      await vi.waitFor(() =>
+        expect(document.querySelector("#aws-topology")?.textContent).toContain("subnet-account-b"),
+      );
+    } else document.querySelector<HTMLButtonElement>("#logout")?.click();
+    const result: VpcLookupResponse = {
+      topology_id: "snapshot-account-a",
+      subnet_id: "subnet-account-a",
+      destination: "203.0.113.1",
+      result: {
+        status: "reported",
+        route_table_id: "rtb-account-a",
+        source: "implicit_main",
+        lookup: {
+          status: "reported_route",
+          destination_cidr: "0.0.0.0/0",
+          origin: "CreateRoute",
+          target: { kind: "transit_gateway", id: "tgw-old-vpc-response" },
+        },
+      },
+      execution_enabled: false,
+      connectivity_tested: false,
+    };
+    old.resolve(response(result));
+    await new Promise((done) => setTimeout(done, 10));
+    expect(document.querySelector("#aws-topology")?.textContent).not.toContain("tgw-old-vpc-response");
+    if (change === "logout") {
+      expect(document.querySelector("#aws-topology")?.childElementCount).toBe(0);
+      expect(document.querySelector<HTMLElement>("#workspace")?.hidden).toBe(true);
+    }
+  });
 }
 afterEach(() => {
   vi.unstubAllGlobals();

@@ -44,8 +44,8 @@ export function renderTgwLookup(
         if (
           value.route_table_id !== tableId ||
           value.destination !== query.destination ||
-          value.execution_enabled ||
-          value.connectivity_tested
+          value.execution_enabled !== false ||
+          value.connectivity_tested !== false
         )
           throw new Error("Lookup response did not match the requested observation scope");
         const result = value.result;
