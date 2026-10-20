@@ -12,6 +12,7 @@ pub mod service;
 pub mod session;
 pub mod source_handoff;
 pub mod target_lookup;
+pub mod tgw_cidr_coverage;
 pub mod vpc_cidr_coverage;
 pub mod vpc_lookup;
 use anyhow::{Context, ensure};

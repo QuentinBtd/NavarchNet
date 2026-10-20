@@ -76,6 +76,30 @@ pub struct TgwLookupResponse {
 }
 #[derive(Deserialize, TS)]
 #[serde(deny_unknown_fields)]
+pub struct TgwCidrCoverageRequest {
+    pub route_table_id: String,
+    pub destination_cidr: String,
+}
+#[derive(Serialize, TS)]
+pub struct TgwCidrCoverageResponse {
+    pub account_id: String,
+    pub topology_id: String,
+    pub started_at: String,
+    pub completed_at: String,
+    pub aws_account_id: String,
+    pub region: String,
+    pub route_table_id: String,
+    pub destination_cidr: String,
+    pub complete_for_supported_queries: bool,
+    pub limitations: Vec<String>,
+    pub request_ids: Vec<String>,
+    pub coverage: aws::tgw_cidr_coverage::TgwCidrCoverage,
+    pub reference_only: bool,
+    pub execution_enabled: bool,
+    pub connectivity_tested: bool,
+}
+#[derive(Deserialize, TS)]
+#[serde(deny_unknown_fields)]
 pub struct TgwIngressRequest {
     pub ingress_attachment_id: String,
     pub destination: String,
@@ -210,6 +234,10 @@ pub fn router(state: AppState) -> Router {
         .route("/aws/accounts/{id}/topology", get(topology_aws))
         .route("/aws/accounts/{id}/tgw-route-lookup", get(lookup_aws_route))
         .route(
+            "/aws/accounts/{id}/tgw-cidr-coverage",
+            get(coverage_aws_tgw),
+        )
+        .route(
             "/aws/accounts/{id}/tgw-ingress-lookup",
             get(lookup_aws_ingress),
         )
@@ -326,6 +354,74 @@ async fn lookup_aws_route(
         execution_enabled: false,
         connectivity_tested: false,
     }))
+}
+enum TgwCoverageFailure {
+    Coverage(aws::tgw_cidr_coverage::TgwCidrCoverageError),
+    Store(anyhow::Error),
+}
+impl IntoResponse for TgwCoverageFailure {
+    fn into_response(self) -> Response {
+        match self {
+            Self::Store(error) => Failure(error).into_response(),
+            Self::Coverage(error) => {
+                use aws::tgw_cidr_coverage::TgwCidrCoverageError::*;
+                let status = match &error {
+                    InvalidDestinationCidr | InvalidTableInput => StatusCode::UNPROCESSABLE_ENTITY,
+                    InputTooLarge { .. } | BudgetExceeded { .. } => StatusCode::PAYLOAD_TOO_LARGE,
+                    PartitionProofUnavailable => StatusCode::CONFLICT,
+                };
+                (status, Json(error)).into_response()
+            }
+        }
+    }
+}
+async fn coverage_aws_tgw(
+    State(s): State<AppState>,
+    Path(id): Path<String>,
+    Query(query): Query<TgwCidrCoverageRequest>,
+) -> Result<Json<TgwCidrCoverageResponse>, TgwCoverageFailure> {
+    use aws::tgw_cidr_coverage::{self, TgwCidrCoverageError, TgwCoverageBudget};
+    tgw_cidr_coverage::validate_query(&query.route_table_id, &query.destination_cidr)
+        .map_err(TgwCoverageFailure::Coverage)?;
+    let topology = s
+        .store
+        .aws_topology(&id)
+        .await
+        .map_err(TgwCoverageFailure::Store)?
+        .topology;
+    if topology.account_id != id || topology.execution_enabled || topology.connectivity_tested {
+        return Err(TgwCoverageFailure::Coverage(
+            TgwCidrCoverageError::PartitionProofUnavailable,
+        ));
+    }
+    let budget = TgwCoverageBudget::default();
+    let coverage = tgw_cidr_coverage::analyze(
+        &topology,
+        &query.route_table_id,
+        &query.destination_cidr,
+        budget,
+    )
+    .map_err(TgwCoverageFailure::Coverage)?;
+    let response = TgwCidrCoverageResponse {
+        account_id: id,
+        topology_id: topology.id,
+        started_at: topology.started_at,
+        completed_at: topology.completed_at,
+        aws_account_id: topology.aws_account_id,
+        region: topology.region,
+        route_table_id: query.route_table_id,
+        destination_cidr: query.destination_cidr,
+        complete_for_supported_queries: topology.complete_for_supported_queries,
+        limitations: topology.limitations,
+        request_ids: topology.request_ids,
+        coverage,
+        reference_only: true,
+        execution_enabled: false,
+        connectivity_tested: false,
+    };
+    tgw_cidr_coverage::check_serialized(&response, budget.response_bytes)
+        .map_err(TgwCoverageFailure::Coverage)?;
+    Ok(Json(response))
 }
 async fn lookup_aws_ingress(
     State(s): State<AppState>,

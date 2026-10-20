@@ -2,7 +2,13 @@
 
 NavarchNet has an implemented fake-provider journey and a locally exercised AWS read-only account/topology slice, not a completed AWS V1 orchestrator. No live AWS API call/resource mutation, release/tag publication, crates.io upload or GHCR upload has occurred.
 
-## Current continuation — compact saved CIDR operator inspector
+## Current continuation — bounded saved per-table TGW CIDR core/API
+
+The typed offline core and authenticated reader `tgw-cidr-coverage` GET partition a canonical destination network using the actual unchanged TGW point interpreter. Complete membership boundaries establish uniform decisions before left-endpoint evaluation; there is no address enumeration, arbitrary sampling or copied VPC reserved-service policy. Original table/parent resources and indexes, historical route spelling/host bits, unknowns, prefix-list/malformed poison, unknown-type-before-static priority and mixed attachment-error order remain explicit. Fixed aggregate input/cut/interval/logical-work/output budgets reject without a successful prefix; complete decision coverage does not imply usable connectivity.
+
+The real PostgreSQL/Axum endpoint tracer executed absent-endpoint RED then GREEN; seven pure core/property tests and extended strict-query/auth/latest-IPv6/budget/provenance/non-mutation API cases pass. Fresh full local prek/mise qualification passed 127 Rust checks (123 backend plus four fixture-driver guards), 124 frontend tests and all 12 unchanged real Chromium journeys, plus production HTTP/crash recovery, generated contracts, all-target Clippy/fmt/types/lint/build and dependency/license audits. Actual source pins, binary/receipt and static assets were captured before this status-only result update. Independent exact-source review and actual normal installed fast/full commit/push hooks remain required before backup; this uncommitted slice is not yet approved. No UI, feature-specific TGW-CIDR browser, automatic source/ingress/target composition, dependency/migration/config/permission change, live AWS, health/BGP/traffic-AZ/egress/ownership/full-path or full-mission acceptance is claimed.
+
+## Reviewed checkpoint — compact saved CIDR operator inspector
 
 Each existing subnet diagnostic can lazily open one collapsed destination-CIDR inspector beside the point form. A blank independent input and explicit button use the already-reviewed reader API; opening it never queries automatically or changes the point/source/target/NAT workflow. Exact captured registration/snapshot/completion/AWS-account/region/query/completeness/limitations/request-ID and true/false markers bind the response. Every interval/result and nullable original-table/index/association evidence is structurally checked before any successful summary appears. This is a view of the backend's proved decisions, not a second IPv6 parser or routing algorithm, source-host identity or an inferred return path.
 
