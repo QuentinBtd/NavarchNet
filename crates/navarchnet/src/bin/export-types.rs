@@ -37,6 +37,8 @@ fn main() {
         AwsTopology,
         ResourceKind,
         AwsResource,
+        NatGatewayMetadata,
+        NatGatewayAddress,
         ObservedRoute,
         RouteAssociation,
         TransitGatewayTableLink,

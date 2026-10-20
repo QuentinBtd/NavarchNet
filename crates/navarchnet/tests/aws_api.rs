@@ -144,6 +144,105 @@ fn registration() -> Value {
     json!({"name":"Fixture AWS account","role_arn":"arn:aws:iam::123456789012:role/Reader","region":"eu-west-1","external_id":"fixture-private-external"})
 }
 #[tokio::test]
+async fn saved_nat_metadata_survives_postgres_and_reader_http_without_sdk_or_inference()
+-> anyhow::Result<()> {
+    let (store, _) = support::isolated().await?;
+    let role: RoleRegistration = serde_json::from_value(registration())?;
+    let account = store
+        .register_aws_verified("fixture", &role, "123456789012", "nat-fixture")
+        .await?;
+    let (_, _, generation) = store.begin_aws_discovery("fixture", &account.id).await?;
+    let metadata = json!({"route_table_id":"nat-literal-unvalidated-reference", "addresses":[
+        {"allocation_id":"eipalloc-a", "association_id":"eipassoc-a", "network_interface_id":"eni-a", "public_ip":"203.0.113.10", "private_ip":"10.0.1.10", "az_name":"eu-west-1a", "az_id":"euw1-az1", "is_primary":true, "status":"succeeded"},
+        {"allocation_id":null, "association_id":null, "network_interface_id":null, "public_ip":"203.0.113.20", "private_ip":null, "az_name":null, "az_id":null, "is_primary":null, "status":"future-status"}
+    ]});
+    let mut nat = AwsResource::new(ResourceKind::NatGateway, "nat-regional".into());
+    nat.availability_mode = Some("regional".into());
+    nat.state = Some("available".into());
+    nat.nat_gateway = Some(serde_json::from_value(metadata.clone())?);
+    let topology = AwsTopology {
+        id: uuid::Uuid::new_v4().to_string(),
+        account_id: account.id.clone(),
+        aws_account_id: account.aws_account_id.clone(),
+        region: account.region.clone(),
+        started_at: "3".into(),
+        completed_at: "7".into(),
+        session_name: "nat-fixture".into(),
+        resources: vec![nat],
+        request_ids: vec!["fixture".into()],
+        complete_for_supported_queries: true,
+        limitations: vec!["NAT metadata is not a measured egress path".into()],
+        execution_enabled: false,
+        connectivity_tested: false,
+    };
+    store
+        .finish_aws_discovery("fixture", generation, &topology)
+        .await?;
+    let before: Value = sqlx::query_scalar("SELECT body FROM aws_topologies WHERE id=$1")
+        .bind(&topology.id)
+        .fetch_one(&store.pool)
+        .await?;
+    let audits_before: i64 = sqlx::query_scalar("SELECT count(*) FROM audit")
+        .fetch_one(&store.pool)
+        .await?;
+    let app = api::router(AppState {
+        store: store.clone(),
+        auth: Arc::new(Auth::demo("a".repeat(32), "r".repeat(32))?),
+        aws: None,
+    });
+    let path = format!("/aws/accounts/{}/topology", account.id);
+    assert_eq!(
+        request(&app, "GET", &path, None, None).await?.0,
+        StatusCode::UNAUTHORIZED
+    );
+    let (status, view) = request(&app, "GET", &path, Some(&"r".repeat(32)), None).await?;
+    assert_eq!(status, StatusCode::OK);
+    assert_eq!(view["topology"]["id"], topology.id);
+    assert_eq!(view["topology"]["completed_at"], "7");
+    assert_eq!(view["topology"]["resources"][0]["nat_gateway"], metadata);
+    assert!(view["topology"]["resources"][0]["subnet_id"].is_null());
+    assert!(view["topology"]["resources"][0]["az_id"].is_null());
+    assert_eq!(view["topology"]["execution_enabled"], false);
+    assert_eq!(view["topology"]["connectivity_tested"], false);
+    assert_eq!(view["topology"]["resources"][0]["managed"], false);
+    assert_eq!(view["adoptions"], json!([]));
+    assert_eq!(view["subnet_route_tables"], json!([]));
+    let after: Value = sqlx::query_scalar("SELECT body FROM aws_topologies WHERE id=$1")
+        .bind(&topology.id)
+        .fetch_one(&store.pool)
+        .await?;
+    assert_eq!(before, after);
+    let audits_after: i64 = sqlx::query_scalar("SELECT count(*) FROM audit")
+        .fetch_one(&store.pool)
+        .await?;
+    assert_eq!(audits_after, audits_before);
+    // A new legacy-shaped row is read without upgrading or rewriting immutable stored JSON.
+    let (_, _, generation) = store.begin_aws_discovery("fixture", &account.id).await?;
+    let mut legacy = before;
+    let id = uuid::Uuid::new_v4().to_string();
+    legacy["id"] = json!(id);
+    legacy["resources"][0]
+        .as_object_mut()
+        .unwrap()
+        .remove("nat_gateway");
+    sqlx::query("INSERT INTO aws_topologies(id,account_id,generation,body) VALUES($1,$2,$3,$4)")
+        .bind(&id)
+        .bind(&account.id)
+        .bind(generation)
+        .bind(&legacy)
+        .execute(&store.pool)
+        .await?;
+    let (status, view) = request(&app, "GET", &path, Some(&"r".repeat(32)), None).await?;
+    assert_eq!(status, StatusCode::OK);
+    assert!(view["topology"]["resources"][0]["nat_gateway"].is_null());
+    let after: Value = sqlx::query_scalar("SELECT body FROM aws_topologies WHERE id=$1")
+        .bind(&id)
+        .fetch_one(&store.pool)
+        .await?;
+    assert_eq!(after, legacy);
+    Ok(())
+}
+#[tokio::test]
 async fn rejects_out_of_allowlist_regions_and_permanent_key_fields_before_provider_calls()
 -> anyhow::Result<()> {
     let (store, _) = support::isolated().await?;

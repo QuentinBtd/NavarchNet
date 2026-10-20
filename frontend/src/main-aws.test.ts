@@ -70,6 +70,7 @@ function topology(id: string): TopologyView {
           related_ids: [],
           connectivity_type: null,
           availability_mode: null,
+          nat_gateway: null,
           managed: false,
         },
       ],

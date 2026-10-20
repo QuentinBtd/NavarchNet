@@ -4,6 +4,8 @@ Base path: `/api/v1`. JSON requests and responses. All routes require `Authoriza
 
 Routes:
 
+Saved topology resources include additive `nat_gateway: NatGatewayMetadata | null`. For current NAT decoding it holds the literal optional `route_table_id` plus `addresses: NatGatewayAddress[] | null`; each tuple retains optional public/private IPs, allocation/association/interface references, AZ name and ID, primary boolean and status. Null metadata covers legacy/non-NAT rows; null addresses means omitted/unreported, distinct from an explicit empty list. Unknown status/reference values remain literal, absent booleans/mode stay unknown, and AZ names are not translated. Existing flat IP arrays remain metadata, including non-success statuses. This field does not establish a usable NAT/route-table link, target health, selected flow AZ or measured public egress; no new endpoint, write or permission is added.
+
 - `GET /snapshot`: bounded accounts/inventory/networks (up to 500 each), plans/operations (100 recent each), auth mode and effective role. Counts describe returned rows, not total historical database rows. No cursor pagination yet.
 - `POST /accounts`: `{name, provider:"fake", role_arn:"fake:..."}`. This executable simulation catalog rejects AWS; real read-only role registration uses the separate `/aws/accounts` catalog.
 - `POST /accounts/{id}/discover`: synthetic VPC/subnet/route ownership discovery; increments inventory revision.

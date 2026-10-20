@@ -61,6 +61,25 @@ pub struct TransitGatewayRoute {
     pub attachments: Vec<TransitGatewayRouteAttachment>,
 }
 #[derive(Debug, Clone, Serialize, Deserialize, TS)]
+pub struct NatGatewayAddress {
+    pub allocation_id: Option<String>,
+    pub association_id: Option<String>,
+    pub network_interface_id: Option<String>,
+    pub public_ip: Option<String>,
+    pub private_ip: Option<String>,
+    pub az_name: Option<String>,
+    pub az_id: Option<String>,
+    pub is_primary: Option<bool>,
+    pub status: Option<String>,
+}
+#[derive(Debug, Clone, Serialize, Deserialize, TS)]
+pub struct NatGatewayMetadata {
+    // Literal EC2 field, not a validated route-table association or forwarding proof.
+    pub route_table_id: Option<String>,
+    // None means omitted/unreported, not a completed empty collection.
+    pub addresses: Option<Vec<NatGatewayAddress>>,
+}
+#[derive(Debug, Clone, Serialize, Deserialize, TS)]
 pub struct AwsResource {
     pub kind: ResourceKind,
     pub id: String,
@@ -85,6 +104,8 @@ pub struct AwsResource {
     pub related_ids: Vec<String>,
     pub connectivity_type: Option<String>,
     pub availability_mode: Option<String>,
+    #[serde(default)]
+    pub nat_gateway: Option<NatGatewayMetadata>,
     // Discovery grants no management rights, including to tagged or RAM-shared resources.
     pub managed: bool,
 }
@@ -110,6 +131,7 @@ impl AwsResource {
             related_ids: vec![],
             connectivity_type: None,
             availability_mode: None,
+            nat_gateway: None,
             managed: false,
         }
     }

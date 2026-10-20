@@ -136,6 +136,43 @@ fn resource(node: &Node, kind: ResourceKind, id_field: &str) -> anyhow::Result<A
     value.state = node.field("state");
     value.connectivity_type = node.field("connectivityType");
     value.availability_mode = node.field("availabilityMode");
+    if value.kind == ResourceKind::NatGateway {
+        value.nat_gateway = Some(NatGatewayMetadata {
+            route_table_id: node.field("routeTableId"),
+            addresses: node
+                .children
+                .iter()
+                .find(|child| child.name == "natGatewayAddressSet")
+                .map(|collection| {
+                    ensure!(
+                        collection.text.trim().is_empty()
+                            && collection.children.iter().all(|child| child.name == "item"),
+                        "Malformed NAT address collection"
+                    );
+                    node.items("natGatewayAddressSet")
+                        .iter()
+                        .map(|address| {
+                            Ok(NatGatewayAddress {
+                                allocation_id: address.field("allocationId"),
+                                association_id: address.field("associationId"),
+                                network_interface_id: address.field("networkInterfaceId"),
+                                public_ip: address.field("publicIp"),
+                                private_ip: address.field("privateIp"),
+                                az_name: address.field("availabilityZone"),
+                                az_id: address.field("availabilityZoneId"),
+                                is_primary: address
+                                    .field("isPrimary")
+                                    .map(|value| value.parse::<bool>())
+                                    .transpose()
+                                    .context("Invalid NAT primary-address marker")?,
+                                status: address.field("status"),
+                            })
+                        })
+                        .collect::<anyhow::Result<Vec<_>>>()
+                })
+                .transpose()?,
+        });
+    }
     for field in ["cidrBlock", "ipv6CidrBlock"] {
         if let Some(cidr) = node.field(field) {
             value.cidrs.push(cidr);
@@ -680,6 +717,56 @@ impl Ec2ReadOnly {
 mod tests {
     use super::*;
     #[test]
+    fn preserves_nat_table_reference_and_address_tuples_without_selecting_egress() {
+        let root = parse(
+            "<DescribeNatGatewaysResponse><requestId>fixture</requestId><natGatewaySet><item><natGatewayId>nat-regional</natGatewayId><availabilityMode>regional</availabilityMode><connectivityType>public</connectivityType><state>available</state><vpcId>vpc-egress</vpcId><routeTableId>rtb-nat-reported</routeTableId><natGatewayAddressSet><item><allocationId>eipalloc-a</allocationId><associationId>eipassoc-a</associationId><networkInterfaceId>eni-a</networkInterfaceId><publicIp>203.0.113.10</publicIp><privateIp>10.0.1.10</privateIp><availabilityZone>eu-west-1a</availabilityZone><availabilityZoneId>euw1-az1</availabilityZoneId><isPrimary>true</isPrimary><status>succeeded</status></item><item><publicIp>203.0.113.20</publicIp><availabilityZoneId>euw1-az2</availabilityZoneId><isPrimary>false</isPrimary><status>failed</status></item></natGatewayAddressSet></item></natGatewaySet></DescribeNatGatewaysResponse>",
+            "DescribeNatGatewaysResponse",
+        ).unwrap();
+        let row = resource(
+            root.items("natGatewaySet")[0],
+            ResourceKind::NatGateway,
+            "natGatewayId",
+        )
+        .unwrap();
+        let value = serde_json::to_value(&row).unwrap();
+        assert_eq!(
+            value["nat_gateway"],
+            serde_json::json!({
+                "route_table_id": "rtb-nat-reported",
+                "addresses": [
+                    {"allocation_id":"eipalloc-a", "association_id":"eipassoc-a", "network_interface_id":"eni-a", "public_ip":"203.0.113.10", "private_ip":"10.0.1.10", "az_name":"eu-west-1a", "az_id":"euw1-az1", "is_primary":true, "status":"succeeded"},
+                    {"allocation_id":null, "association_id":null, "network_interface_id":null, "public_ip":"203.0.113.20", "private_ip":null, "az_name":null, "az_id":"euw1-az2", "is_primary":false, "status":"failed"}
+                ]
+            })
+        );
+        // Keep the legacy aggregate, including failed-address metadata, without calling it used/healthy.
+        assert_eq!(row.public_ips, ["203.0.113.10", "203.0.113.20"]);
+        assert!(row.subnet_id.is_none() && row.az_id.is_none() && !row.managed);
+    }
+    #[test]
+    fn absent_nat_addresses_remain_unknown_instead_of_becoming_a_completed_empty_list() {
+        for (body, addresses) in [
+            ("", serde_json::Value::Null),
+            ("<natGatewayAddressSet/>", serde_json::json!([])),
+        ] {
+            let root = parse(&format!("<DescribeNatGatewaysResponse><requestId>fixture</requestId><natGatewaySet><item><natGatewayId>nat-legacy</natGatewayId>{body}</item></natGatewaySet></DescribeNatGatewaysResponse>"), "DescribeNatGatewaysResponse").unwrap();
+            let row = resource(
+                root.items("natGatewaySet")[0],
+                ResourceKind::NatGateway,
+                "natGatewayId",
+            )
+            .unwrap();
+            assert_eq!(
+                serde_json::to_value(&row).unwrap()["nat_gateway"]["addresses"],
+                addresses
+            );
+            assert!(row.availability_mode.is_none() && row.subnet_id.is_none());
+        }
+        let root = parse("<DescribeVpcsResponse><requestId>fixture</requestId><vpcSet><item><vpcId>vpc-a</vpcId><routeTableId>rtb-unrelated</routeTableId></item></vpcSet></DescribeVpcsResponse>", "DescribeVpcsResponse").unwrap();
+        let row = resource(root.items("vpcSet")[0], ResourceKind::Vpc, "vpcId").unwrap();
+        assert!(serde_json::to_value(&row).unwrap()["nat_gateway"].is_null());
+    }
+    #[test]
     fn preserves_route_association_readiness_without_assuming_missing_state() {
         let root=parse("<DescribeRouteTablesResponse><requestId>fixture</requestId><routeTableSet><item><routeTableId>rtb-main</routeTableId><associationSet><item><main>true</main><routeTableAssociationId>rtbassoc-main</routeTableAssociationId><associationState><state>associated</state></associationState></item><item><main>false</main><subnetId>subnet-transition</subnetId><associationState><state>disassociating</state></associationState></item><item><main>false</main><subnetId>subnet-legacy</subnetId></item></associationSet></item></routeTableSet></DescribeRouteTablesResponse>","DescribeRouteTablesResponse").unwrap();
         let row = resource(
@@ -691,6 +778,70 @@ mod tests {
         assert_eq!(row.associations[0].state.as_deref(), Some("associated"));
         assert_eq!(row.associations[1].state.as_deref(), Some("disassociating"));
         assert!(row.associations[2].state.is_none());
+    }
+    #[test]
+    fn nat_markers_keep_unknown_values_and_existing_strict_boolean_and_ip_guards() {
+        let decode = |body: &str| {
+            let root = parse(
+                &format!(
+                    "<DescribeNatGatewaysResponse><requestId>fixture</requestId><natGatewaySet><item><natGatewayId>nat-a</natGatewayId><routeTableId>nat-literal-not-a-table</routeTableId><natGatewayAddressSet><item>{body}</item></natGatewayAddressSet></item></natGatewaySet></DescribeNatGatewaysResponse>"
+                ),
+                "DescribeNatGatewaysResponse",
+            )?;
+            resource(
+                root.items("natGatewaySet")[0],
+                ResourceKind::NatGateway,
+                "natGatewayId",
+            )
+        };
+        let row =
+            decode("<availabilityZone>eu-west-1a</availabilityZone><status>future-status</status>")
+                .unwrap();
+        let json = serde_json::to_value(&row).unwrap();
+        assert_eq!(
+            json["nat_gateway"]["route_table_id"],
+            "nat-literal-not-a-table"
+        );
+        let address = &json["nat_gateway"]["addresses"][0];
+        assert_eq!(address["status"], "future-status");
+        assert_eq!(address["az_name"], "eu-west-1a");
+        assert!(address["is_primary"].is_null() && address["az_id"].is_null());
+        assert!(row.az_id.is_none() && row.availability_mode.is_none());
+        for value in ["TRUE", "1", "invalid-marker-do-not-echo"] {
+            let error = decode(&format!("<isPrimary>{value}</isPrimary>"))
+                .unwrap_err()
+                .to_string();
+            assert_eq!(error, "Invalid NAT primary-address marker");
+        }
+        for body in [
+            "<publicIp>invalid</publicIp>",
+            "<privateIp>invalid</privateIp>",
+        ] {
+            assert!(decode(body).is_err());
+        }
+        let mut legacy = json;
+        legacy.as_object_mut().unwrap().remove("nat_gateway");
+        let old: AwsResource = serde_json::from_value(legacy).unwrap();
+        assert!(old.nat_gateway.is_none());
+    }
+    #[test]
+    fn malformed_nat_address_collections_cannot_be_reported_as_empty_or_partial() {
+        for body in [
+            "unexpected-text",
+            "<futureItem/>",
+            "<item><publicIp>203.0.113.10</publicIp></item><futureItem/>",
+        ] {
+            let root = parse(&format!("<DescribeNatGatewaysResponse><requestId>fixture</requestId><natGatewaySet><item><natGatewayId>nat-a</natGatewayId><natGatewayAddressSet>{body}</natGatewayAddressSet></item></natGatewaySet></DescribeNatGatewaysResponse>"), "DescribeNatGatewaysResponse").unwrap();
+            assert!(
+                resource(
+                    root.items("natGatewaySet")[0],
+                    ResourceKind::NatGateway,
+                    "natGatewayId"
+                )
+                .is_err(),
+                "Published malformed/partial NAT address collection"
+            );
+        }
     }
     #[test]
     fn reports_public_addresses_without_claiming_they_are_tested_egress() {
@@ -785,7 +936,7 @@ mod tests {
             } else if *action == "DescribeNatGateways" {
                 (
                     format!(
-                        "<item><{id}>nat-01111111111111111</{id}><availabilityMode>regional</availabilityMode><tagSet><item><key>navarchnet:managed</key><value>true</value></item></tagSet></item>"
+                        "<item><{id}>nat-01111111111111111</{id}><availabilityMode>regional</availabilityMode><routeTableId>rtb-regional-reference</routeTableId><natGatewayAddressSet><item><publicIp>203.0.113.10</publicIp><availabilityZoneId>euw1-az1</availabilityZoneId><status>succeeded</status><isPrimary>true</isPrimary></item><item><publicIp>203.0.113.20</publicIp><availabilityZone>eu-west-1b</availabilityZone><status>future-state</status></item></natGatewayAddressSet><tagSet><item><key>navarchnet:managed</key><value>true</value></item></tagSet></item>"
                     ),
                     "",
                 )
@@ -837,6 +988,18 @@ mod tests {
             .unwrap();
         assert_eq!(nat.availability_mode.as_deref(), Some("regional"));
         assert!(nat.vpc_id.is_none());
+        let metadata = nat.nat_gateway.as_ref().unwrap();
+        assert_eq!(
+            metadata.route_table_id.as_deref(),
+            Some("rtb-regional-reference")
+        );
+        let addresses = metadata.addresses.as_ref().unwrap();
+        assert_eq!(addresses.len(), 2);
+        assert_eq!(addresses[0].az_id.as_deref(), Some("euw1-az1"));
+        assert_eq!(addresses[0].is_primary, Some(true));
+        assert_eq!(addresses[1].az_name.as_deref(), Some("eu-west-1b"));
+        assert_eq!(addresses[1].status.as_deref(), Some("future-state"));
+        assert!(addresses[1].az_id.is_none() && addresses[1].is_primary.is_none());
         assert!(resources.iter().all(|r| !r.managed));
         server.abort();
     }
