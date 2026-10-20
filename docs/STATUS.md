@@ -2,7 +2,15 @@
 
 NavarchNet has an implemented fake-provider journey and a locally exercised AWS read-only account/topology slice, not a completed AWS V1 orchestrator. No live AWS API call/resource mutation, release/tag publication, crates.io upload or GHCR upload has occurred.
 
-## Current continuation — saved TGW ingress association lookup (uncommitted)
+## Current continuation — offline external-effect journal (uncommitted)
+
+The ingress lookup was independently reviewed on 815 source pins and backed up as cbcdb1f01a451c7c9325dc33c83801d760161ebf on OPEN/DRAFT PR1; installed commit/push hooks passed and exact remote head/workflow readbacks are retained. Its scope remains saved TGW ingress/table analysis, not full routing.
+
+The new offline library persists immutable scoped effect intent and a stable client token, commits a dispatch marker before issuing an in-process permit, and allows only observation after an ambiguous outcome. Confirmation rejects stale/expired fences and mismatched trusted identity/fingerprint evidence; journal identity and event history cannot be rewritten/deleted through ordinary SQL. Real PostgreSQL tests exercise separate replay commits, concurrent admission, reconnect and an actual child-worker SIGKILL. The initial table/identity tests had real RED/GREEN output; the initial missing Rust API test was a compile-time RED before implementation, not runtime recovery evidence. Migration-only changes now invalidate SQLx's embedded migrations via a crate build script. The installed full prek/mise gate passed 62 Rust tests (zero failed/ignored), 16 frontend, 3 existing core browser, 4 workflow and 6 binary-contract tests, real PostgreSQL/HTTP crash recovery, types/Clippy/build/contract and audits. Independent review remains pending. No HTTP admission, fake-executor integration, live adapter, multi-step cloud plan, AWS mutation or production exactly-once/fencing acceptance is claimed.
+
+## Reviewed saved TGW ingress association lookup
+
+The pending-review language in the original ingress checkpoint below is historical: that exact slice was subsequently approved and backed up as cbcdb1f. Its approval does not cover the newer offline journal above.
 
 The saved-lookup operator UI was independently reviewed on 814 unchanged source pins and backed up as a70b4cecd0b3d20c2aad00d032facb4408310222 on OPEN/DRAFT PR1. Actual installed fast pre-commit and full pre-push hooks passed; exact remote branch/PR head and manual-only workflow readbacks are retained. A separate new saved-lookup browser case is still not claimed.
 
