@@ -61,8 +61,12 @@ description = "Run frontend behavior tests"
 run = "npm --prefix frontend test"
 
 [tasks.binary-contract-test]
-description = "Fast current-artifact receipt and shell-path rejection/quoting tests"
-run = "node --test scripts/server-binary.test.mjs"
+description = "Fast current-artifact receipt, shell-path and isolated browser fixture boundary tests"
+run = "node --test scripts/server-binary.test.mjs scripts/browser-fixture-server.test.mjs"
+
+[tasks.fixture-database-test]
+description = "Credential-free SQLx effective-endpoint/search-path fixture guards; no database connection"
+run = "cargo test --locked --example browser_fixture_seed"
 
 [tasks.frontend-build]
 description = "Build production static frontend assets"
@@ -98,7 +102,7 @@ run = ["mise run workflow-check", "mise run fmt-check", "mise run binary-contrac
 
 [tasks.check]
 description = "Full source validation with actual PostgreSQL, build and crash smoke"
-run = ["mise run workflow-check", "mise run fmt-check", "mise run binary-contract-test", "mise run lint", "mise run backend", "mise run contract", "mise run frontend-install", "mise run frontend-check", "mise run frontend-test", "mise run frontend-build", "mise run build", "mise run smoke"]
+run = ["mise run workflow-check", "mise run fmt-check", "mise run binary-contract-test", "mise run lint", "mise run backend", "mise run fixture-database-test", "mise run contract", "mise run frontend-install", "mise run frontend-check", "mise run frontend-test", "mise run frontend-build", "mise run build", "mise run smoke"]
 
 [tasks.full]
 description = "Pre-push source gate: check + security/licenses + real browser; fails if prerequisites are missing"

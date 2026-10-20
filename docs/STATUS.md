@@ -2,7 +2,19 @@
 
 NavarchNet has an implemented fake-provider journey and a locally exercised AWS read-only account/topology slice, not a completed AWS V1 orchestrator. No live AWS API call/resource mutation, release/tag publication, crates.io upload or GHCR upload has occurred.
 
-## Current continuation — offline external-effect journal (uncommitted)
+## Current continuation — real saved-lookup browser acceptance (uncommitted)
+
+The offline journal was independently approved on 819 source pins and backed up as 4069a46a02d627837c3c94d0a7b6111f32220161; installed hooks and exact remote OPEN/DRAFT PR1 readbacks passed. It remains an internal offline primitive, not an enabled AWS executor.
+
+The new browser fixture seeds only a generated local PostgreSQL schema, starts the actual current production binary with SDK access disabled, and runs a reader's saved-table lookup journey against real HTTP/storage. The case checks forward/blackhole/unresolved results, scope/false-execution flags, safe provider text, account switching, logout and unchanged stored observations/plans/inventory. Its targeted Chromium run and full installed prek/mise gate passed: 66 Rust (62 backend plus 4 credential-free SQLx driver guards, zero failed/ignored), 16 frontend, 4 real browser journeys (3 prior core plus this saved-lookup case), 4 workflow-policy and 6 binary-contract plus 5 fixture-boundary tests, real PostgreSQL/HTTP crash recovery and audits. The earlier missing-listener failure is infrastructure RED, not an old product regression. No API response mocking or fixture mutation endpoint is used. No live AWS, full-path or all-races acceptance is claimed.
+
+The first independent harness review rejected two real isolation defects: SQLx routing query overrides defeated the URL-authority host check, and accumulated startup options could override the generated search_path. Regression tests genuinely failed before correction. The wrapper/config now reject driver query overrides before any server/seeder starts, use one canonical base for both processes, strip ambient PostgreSQL settings and require explicit disposable credentials. The seeder independently validates SQLx's effective endpoint/startup options before any connection. The original failed verdict is retained; fresh exact-source re-review remains required before this harness is pushed. No remote endpoint was contacted to reproduce the parser defects.
+
+The first re-review closed those query defects but found Playwright's inherited-environment merge and the direct seeder's missing explicit database check. New composed-config and driver regressions had actual runtime RED/GREEN results. The actual Playwright config now rejects ambient PostgreSQL keys before defining either server, and both guards reject absent/empty database paths rather than using PostgreSQL defaults. Both failed verdicts remain retained; the second corrected-source re-review is required before backup. Process cleanup does not imply schema deletion; generated schemas remain in the disposable database until it is destroyed.
+
+## Reviewed offline external-effect journal
+
+The original journal pending-review wording below is historical; its source review completed before backup 4069a46. The current browser harness has its own separate review requirement.
 
 The ingress lookup was independently reviewed on 815 source pins and backed up as cbcdb1f01a451c7c9325dc33c83801d760161ebf on OPEN/DRAFT PR1; installed commit/push hooks passed and exact remote head/workflow readbacks are retained. Its scope remains saved TGW ingress/table analysis, not full routing.
 
@@ -64,7 +76,7 @@ First actual CI run: https://github.com/QuentinBtd/NavarchNet/actions/runs/39258
 
 ## Remaining acceptance scope
 
-- Fresh independent review of the new ingress-lookup delta; complete effective-route analysis and remaining protocol boundaries. Live role onboarding/discovery/IAM evaluation and all cloud acceptance remain unexecuted; metadata consent does not grant route-management permission.
+- Fresh independent review of the saved-lookup browser harness; complete effective-route analysis and remaining protocol boundaries. Prior ingress and offline journal reviews are complete for their exact checkpoints, not for later changes. Live role onboarding/discovery/IAM evaluation and all cloud acceptance remain unexecuted; metadata consent does not grant route-management permission.
 - Action-level TGW/RAM/zonal-NAT/forward-and-return routing execution, external-side-effect stale-worker/crash recovery and actual isolated multi-account egress acceptance.
 - Complete browser OIDC authorization-code/PKCE flow, automatic JWKS rotation, production database privilege separation, cursor pagination/retention and supported safe connection migration/deletion.
 - Maintainer-gated publication automation, versioned GHCR images, GitHub Releases and verified standard SBOM/provenance. Current AWS source has not been requalified as native x64/ARM64 archives or containers; historical successful packages are not evidence for this delta. Publication is explicitly unexecuted.
