@@ -18,11 +18,15 @@ async fn api_enforces_auth_on_every_mutation() -> anyhow::Result<()> {
     let state = AppState {
         store,
         auth: Arc::new(Auth::demo("a".repeat(32), "r".repeat(32))?),
+        aws: None,
     };
     let router = api::router(state);
     for path in [
         "/accounts",
         "/accounts/unknown/discover",
+        "/aws/accounts",
+        "/aws/accounts/unknown/discover",
+        "/aws/accounts/unknown/adoptions",
         "/networks",
         "/plans",
         "/plans/unknown/apply",

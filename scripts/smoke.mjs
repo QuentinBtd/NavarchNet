@@ -1,15 +1,17 @@
 import assert from "node:assert/strict";
 import { spawn, spawnSync } from "node:child_process";
 import { randomBytes } from "node:crypto";
+import { smokeBinary } from "./server-binary.mjs";
 
 const database = process.env.DATABASE_URL;
 assert(database, "DATABASE_URL is required; real PostgreSQL must be reachable");
 const admin = randomBytes(32).toString("hex");
 const reader = randomBytes(32).toString("hex");
 const base = "http://127.0.0.1:18081";
+const binary = smokeBinary();
 let child;
 function start() {
-  child = spawn(process.env.NAVARCHNET_BINARY ?? "target/debug/navarchnet", [], { env: { ...process.env, NAVARCHNET_AUTH_MODE: "demo", NAVARCHNET_ADMIN_TOKEN: admin, NAVARCHNET_READER_TOKEN: reader, NAVARCHNET_BIND: "127.0.0.1:18081", RUST_LOG: "warn" }, stdio: ["ignore", "inherit", "inherit"] });
+  child = spawn(binary, [], { env: { ...process.env, NAVARCHNET_AUTH_MODE: "demo", NAVARCHNET_AWS_READ_ONLY: "false", NAVARCHNET_ADMIN_TOKEN: admin, NAVARCHNET_READER_TOKEN: reader, NAVARCHNET_BIND: "127.0.0.1:18081", RUST_LOG: "warn" }, stdio: ["ignore", "inherit", "inherit"] });
   child.on("error", (error) => { console.error(error); process.exitCode = 1; });
 }
 async function stop(signal = "SIGTERM") {
@@ -40,10 +42,12 @@ async function complete(id, expected) {
 }
 try {
   start(); await ready();
-  const health = spawnSync(process.env.NAVARCHNET_BINARY ?? "target/debug/navarchnet", ["--healthcheck"], { env: { ...process.env, NAVARCHNET_BIND: "127.0.0.1:18081" }, timeout: 5000 });
+  const health = spawnSync(binary, ["--healthcheck"], { env: { ...process.env, NAVARCHNET_BIND: "127.0.0.1:18081" }, timeout: 5000 });
   assert.equal(health.status, 0, `Healthcheck failed: ${health.stderr}`);
   const page = await fetch(base); assert.equal(page.status, 200); assert.match(await page.text(), /NavarchNet/);
   await api("/snapshot", undefined, "invalid", 401);
+  const snapshot = await api("/snapshot", undefined, reader);
+  assert.deepEqual(await api("/aws/accounts", undefined, reader), snapshot.aws_accounts);
   await api("/accounts", { name: "Forbidden", provider: "fake", role_arn: "fake:role" }, reader, 403);
   const account = await api("/accounts", { name: "Smoke application", provider: "fake", role_arn: "fake:smoke-role" });
   const inventory = await api(`/accounts/${account.id}/discover`, {});

@@ -1,8 +1,13 @@
 use crate::{
     auth::{Auth, Principal, Role},
+    aws::{
+        self, AdoptionConsent, AdoptionRecord, RoleRegistration, TopologyView, VerifiedAccount,
+        service::ReadOnlyAws,
+    },
     domain::*,
     store::Store,
 };
+use anyhow::Context;
 use axum::{
     Extension, Json, Router,
     extract::{DefaultBodyLimit, Path, Request, State},
@@ -20,6 +25,7 @@ use ts_rs::TS;
 pub struct AppState {
     pub store: Store,
     pub auth: Arc<Auth>,
+    pub aws: Option<Arc<dyn ReadOnlyAws>>,
 }
 #[derive(Serialize, TS)]
 pub struct Snapshot {
@@ -30,6 +36,9 @@ pub struct Snapshot {
     pub operations: Vec<Operation>,
     pub mode: String,
     pub role: String,
+    pub aws_accounts: Vec<VerifiedAccount>,
+    pub aws_read_only_enabled: bool,
+    pub aws_regions: Vec<String>,
 }
 #[derive(Deserialize, TS)]
 pub struct RegisterAccount {
@@ -77,6 +86,10 @@ pub fn router(state: AppState) -> Router {
         .route("/snapshot", get(snapshot))
         .route("/accounts", post(register))
         .route("/accounts/{id}/discover", post(discover))
+        .route("/aws/accounts", get(list_aws).post(register_aws))
+        .route("/aws/accounts/{id}/discover", post(discover_aws))
+        .route("/aws/accounts/{id}/topology", get(topology_aws))
+        .route("/aws/accounts/{id}/adoptions", post(adopt_aws))
         .route("/networks", post(create_network))
         .route("/plans", post(create_plan))
         .route("/plans/{id}/apply", post(apply))
@@ -136,6 +149,9 @@ async fn snapshot(
     Extension(p): Extension<Principal>,
 ) -> Result<Json<Snapshot>, Failure> {
     Ok(Json(Snapshot {
+        aws_accounts: s.store.aws_accounts().await?,
+        aws_read_only_enabled: s.aws.is_some(),
+        aws_regions: s.aws.as_ref().map(|p| p.regions()).unwrap_or_default(),
         accounts: s.store.accounts().await?,
         inventory: s.store.inventories().await?,
         networks: s.store.networks().await?,
@@ -150,6 +166,120 @@ async fn snapshot(
         .into(),
     }))
 }
+async fn list_aws(State(s): State<AppState>) -> Result<Json<Vec<VerifiedAccount>>, Failure> {
+    Ok(Json(s.store.aws_accounts().await?))
+}
+async fn aws_audit(s: &AppState, actor: &str, event: &str, target: &str) -> anyhow::Result<()> {
+    let mut tx = s.store.pool.begin().await?;
+    crate::store::audit(&mut tx, actor, event, target).await?;
+    tx.commit().await?;
+    Ok(())
+}
+async fn register_aws(
+    State(s): State<AppState>,
+    Extension(p): Extension<Principal>,
+    Json(body): Json<RoleRegistration>,
+) -> Result<Json<VerifiedAccount>, Failure> {
+    let provider=s.aws.as_ref().context("AWS read-only onboarding is disabled; configure explicit regions and production authentication")?;
+    body.validate()?;
+    if !provider.regions().contains(&body.region) {
+        return Err(Failure(anyhow::anyhow!(
+            "AWS region is not enabled by the operator"
+        )));
+    }
+    aws_audit(&s, &p.subject, "aws_verification_started", &body.role_arn).await?;
+    let result = tokio::time::timeout(
+        std::time::Duration::from_secs(30),
+        provider.verify(&body, &p.subject),
+    )
+    .await;
+    let identity = match result {
+        Ok(Ok(identity)) => identity,
+        other => {
+            aws_audit(&s, &p.subject, "aws_verification_failed", &body.role_arn).await?;
+            return Err(Failure(match other {
+                Ok(Err(error)) => error,
+                _ => anyhow::anyhow!("AWS role verification timed out"),
+            }));
+        }
+    };
+    Ok(Json(
+        s.store
+            .register_aws_verified(
+                &p.subject,
+                &body,
+                &identity.account_id,
+                &identity.session_name,
+            )
+            .await?,
+    ))
+}
+async fn discover_aws(
+    State(s): State<AppState>,
+    Extension(p): Extension<Principal>,
+    Path(id): Path<String>,
+) -> Result<Json<aws::observation::AwsTopology>, Failure> {
+    let provider = s
+        .aws
+        .as_ref()
+        .context("AWS read-only discovery is disabled")?;
+    let (request, account, generation) = s.store.begin_aws_discovery(&p.subject, &id).await?;
+    let result = tokio::time::timeout(
+        std::time::Duration::from_secs(180),
+        provider.discover(&request, &account, &p.subject),
+    )
+    .await;
+    let topology = match result {
+        Ok(Ok(topology)) => topology,
+        other => {
+            aws_audit(&s, &p.subject, "aws_discovery_failed", &id).await?;
+            return Err(Failure(match other {
+                Ok(Err(error)) => error,
+                _ => anyhow::anyhow!(
+                    "AWS discovery timed out; the previous complete observation remains available"
+                ),
+            }));
+        }
+    };
+    if topology.account_id != id
+        || topology.aws_account_id != account.aws_account_id
+        || topology.region != account.region
+    {
+        aws_audit(&s, &p.subject, "aws_discovery_failed", &id).await?;
+        return Err(Failure(anyhow::anyhow!(
+            "AWS discovery returned a different account or region; prior observation preserved"
+        )));
+    }
+    if let Err(error) = s
+        .store
+        .finish_aws_discovery(&p.subject, generation, &topology)
+        .await
+    {
+        aws_audit(&s, &p.subject, "aws_discovery_failed", &id).await?;
+        return Err(error.into());
+    }
+    Ok(Json(topology))
+}
+async fn topology_aws(
+    State(s): State<AppState>,
+    Path(id): Path<String>,
+) -> Result<Json<TopologyView>, Failure> {
+    Ok(Json(s.store.aws_topology(&id).await?))
+}
+async fn adopt_aws(
+    State(s): State<AppState>,
+    Extension(p): Extension<Principal>,
+    Path(id): Path<String>,
+    Json(body): Json<AdoptionConsent>,
+) -> Result<Json<AdoptionRecord>, Failure> {
+    s.aws
+        .as_ref()
+        .context("AWS ownership consent is disabled")?;
+    Ok(Json(
+        s.store.adopt_aws_resource(&p.subject, &id, &body).await?,
+    ))
+}
+
 async fn register(
     State(s): State<AppState>,
     Extension(p): Extension<Principal>,

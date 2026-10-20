@@ -1,6 +1,6 @@
 # Configuration and authentication
 
-The server validates configuration at startup and fails closed if authentication mode or required secrets are missing. It never loads AWS credentials in this preview.
+The server validates configuration at startup and fails closed if authentication mode or required secrets are missing. AWS SDK access defaults off; disabled startup and the demo never evaluate the controller credential chain.
 
 Environment variables:
 
@@ -14,6 +14,10 @@ Environment variables:
 - `NAVARCHNET_OIDC_ISSUER`: exact HTTPS issuer string.
 - `NAVARCHNET_OIDC_AUDIENCE`: exact resource/API audience.
 - `RUST_LOG`: tracing filter; `navarchnet=info` is sufficient for normal operation. Do not enable SQL/HTTP payload/header logging around credentials.
+- `NAVARCHNET_AWS_READ_ONLY`: absent or exactly `false` disables SDK access; exactly `true` explicitly enables the read-only adapter. Other values fail startup. Enabling it with demo authentication is rejected.
+- `NAVARCHNET_AWS_REGIONS`: required non-empty comma-separated region allowlist when read-only access is enabled, for example `eu-west-1,eu-west-3`. Values are validated, not trimmed/repaired. Commercial AWS partition only; China/GovCloud/isolated partitions are unsupported. Each account registration selects one allowed region.
+
+AWS onboarding accepts a role ARN and optional ExternalId, never access-key fields. The official SDK controller chain is loaded lazily only for an enabled, authenticated administrator request; prefer workload identity or another operator-managed short-lived source. Target sessions request 900 seconds and carry a region-scoped read-only inline policy with explicit denial of other actions. SDK and Query requests are bounded; the shared factory admits one active verification/discovery at a time. Verification is capped at 30 seconds and discovery at 180 seconds, including waiting for admission. See [AWS onboarding](aws-onboarding.md) for exact permissions and verification limits. ExternalId is private PostgreSQL configuration; role ARNs are visible to authenticated readers. No target credentials are serialized into database metadata.
 
 ## OIDC access-token integration
 
@@ -23,7 +27,7 @@ Export the issuer's currently trusted RSA public key out-of-band into the mounte
 
 The UI accepts an access token obtained through your established OIDC client and stores it only in memory. It does not implement authorization-code/PKCE redirect login or refresh tokens. Reloading/signing out drops it. A complete browser SSO client is remaining product scope, not something the reverse proxy magically supplies. Set a TLS reverse proxy, strict ingress/rate limits and security headers; preserve the Authorization header and never put bearer tokens into query parameters.
 
-The server authorizes mutations before deserializing their bodies. Hiding frontend buttons is not the authorization boundary. Demo drift injection is absent outside demo authentication. Current account/network APIs still create only fake resources even in OIDC mode.
+The server authorizes non-GET operations before deserializing their bodies. Hiding frontend buttons is not the authorization boundary. Demo drift injection is absent outside demo authentication. The original account/network/planner APIs create only fake resources even in OIDC mode. Separate `/aws/accounts` endpoints verify roles, read observations and record metadata consent only; none can execute AWS resource mutations. Saved AWS observations remain readable when SDK access is disabled.
 
 ## Health and shutdown
 

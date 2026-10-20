@@ -58,10 +58,17 @@ async fn main() -> anyhow::Result<()> {
         "Demo authentication must bind loopback unless explicitly opted into isolated container networking"
     );
     let store = Store::connect(&std::env::var("DATABASE_URL")?).await?;
+    let aws = navarchnet::aws::service::configure(
+        std::env::var("NAVARCHNET_AWS_READ_ONLY").ok().as_deref(),
+        std::env::var("NAVARCHNET_AWS_REGIONS").ok().as_deref(),
+        auth.is_demo(),
+    )?
+    .map(|provider| Arc::new(provider) as Arc<dyn navarchnet::aws::service::ReadOnlyAws>);
     store.migrate().await?;
     let state = api::AppState {
         store: store.clone(),
         auth: Arc::new(auth),
+        aws,
     };
     let (stop, mut stopped) = tokio::sync::watch::channel(false);
     let worker_store = store.clone();
@@ -76,7 +83,7 @@ async fn main() -> anyhow::Result<()> {
         }
     });
     let listener = tokio::net::TcpListener::bind(bind).await?;
-    tracing::info!(address=%bind,"NavarchNet started; fake provider only; active connectivity untested");
+    tracing::info!(address=%bind,aws_read_only=state.aws.is_some(),"NavarchNet started; AWS execution disabled; active connectivity untested");
     let result = axum::serve(listener, api::router(state))
         .with_graceful_shutdown(async move {
             #[cfg(unix)]

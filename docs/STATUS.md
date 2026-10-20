@@ -1,8 +1,20 @@
 # Delivery status — development preview
 
-NavarchNet is an implemented, locally exercised fake-provider vertical slice, not a completed AWS V1 orchestrator. No AWS API/resource mutation, release/tag publication, crates.io upload or GHCR upload has occurred.
+NavarchNet has an implemented fake-provider journey and a locally exercised AWS read-only account/topology slice, not a completed AWS V1 orchestrator. No live AWS API call/resource mutation, release/tag publication, crates.io upload or GHCR upload has occurred.
 
-## Implemented and verified locally
+## Current development continuation (uncommitted)
+
+The first completed independent review of the read-only extension rejected an integration defect: an inherited Cargo target override could build the current source while smoke/Playwright launched an obsolete default-target server. The original verdict and earlier default-target qualification remain scoped historical evidence. The fix now records Cargo's actual absolute executable artifact and hash, uses it for HTTP/healthcheck/browser startup, and passes a genuine local RED/GREEN regression with a distinct obsolete default binary and a space-containing alternate target. Six fast artifact/quoting tests pass. The same boundary implements the previously advertised authenticated public `GET /aws/accounts` using the existing secret-free store view, including reads with SDK access disabled. The actual full pre-push gate now also passed against the supported alternate target: 44 Rust, 10 frontend, 3 browser, 4 workflow-policy and 6 artifact-contract tests, real PostgreSQL/crash recovery and existing strict build/audit/contract gates. Fresh independent changed-source re-review remains pending before any push; no earlier verdict is reused as approval.
+
+The user changed validation policy to local-first. The exact `.mise.toml` and repository-local prek pre-commit/full pre-push hooks are implemented and have actually run. Heavy workflows now use only workflow_dispatch, with shared local tasks and no automatic /test handler. The fresh composed full pre-push gate passed 44 Rust tests (zero failed/ignored), 10 frontend tests, 3 browser journeys, 4 workflow-policy tests, real PostgreSQL/migrations/HTTP crash smoke, strict Clippy/type/build/contract checks and security/license checks for 446 dependency components. The actual fast pre-commit hook passed too; removing DATABASE_URL fails the mandatory PostgreSQL task with exit 2. A formatting failure on an earlier full attempt was corrected, then the complete gate was rerun successfully. No new commit, push or Actions development run has occurred. A fresh independent review of this delta remains pending; historical review verdicts do not qualify the new AWS code.
+
+Implemented AWS work includes official SDK STS sessions with explicit caller validation, refresh/requested attribution and a region-scoped inline read-only policy, RAM sharing reads, signed paginated/bounded EC2 Query observations, private ExternalId configuration/authenticated public metadata separation, immutable PostgreSQL observations, superseding-discovery fencing and explicit VPC/TGW metadata consent. Authenticated read-only topology and administrator-only onboarding/discovery/consent HTTP routes are tested against real PostgreSQL with injected credential-free fixtures. Unknown key fields and non-allowlisted regions are rejected before provider verification. A shared factory semaphore bounds active SDK work. Protocol fixtures cover expiration refresh, retry exhaustion, permission non-retry, redirect rejection and aggregate body limits. AWS UI views include saved snapshots, IP-reporting caveats, safe provider text, explicit consent and incremental resource rendering. Production AWS access defaults off, requires OIDC and an explicit region allowlist, and cannot execute network mutations. No local fixture establishes live AWS connectivity or live IAM policy acceptance.
+
+The continuation now derives typed, indexed subnet route-table selections from reported explicit/main associations, preserving unknown association readiness and refusing ambiguous/foreign scope. Real PostgreSQL legacy-row tests prove reads do not rewrite immutable snapshots. This is configuration analysis, not full effective routing. Floci 2.3.0 was source-inventoried against exact operations and its digest-verified native startup was observed; provider-client compatibility was not exercised because network isolation is unavailable here. See docs/floci-evaluation.md for source gaps, the readiness-oracle failure and actual boundaries.
+
+The latest read-only extension captures scoped TGW associations/propagations with typed attachment/resource/state/announcement metadata, paginated signed local protocol fixtures, shared EC2 body bounds and a 10,000-relationship capture/persistence limit. Legacy unqueried fields remain distinct from completed empty reads. Permission/cycle/missing-collection/duplicate failures abort discovery; no observation grants ownership or proves a packet path. The session policy now includes only the two additional exact EC2 reads. Floci source coverage now includes 17 current operation names, still with zero runtime provider operations exercised.
+
+## Earlier committed fake-provider baseline
 
 - Rust modular backend, PostgreSQL 17.11 persistence/migrations, static TypeScript UI and generated API contract.
 - Account registration/discovery → VPC/subnet/regional egress selection → immutable auditable plan → durable execution → result/drift/partial-failure inspection.
@@ -16,22 +28,22 @@ NavarchNet is an implemented, locally exercised fake-provider vertical slice, no
 
 ## Remote verification and infrastructure boundary
 
-Draft PR: https://github.com/QuentinBtd/NavarchNet/pull/1. Exact branch/workflow/PR writes were read back successfully. Ordinary CI runs on PRs and main with read-only permissions, pinned action SHAs, locked installs and no cloud credentials/publication steps.
+Draft PR: https://github.com/QuentinBtd/NavarchNet/pull/1. The historical baseline branch/workflow/PR writes were read back successfully. Its then-automatic CI was subsequently superseded by the user's local-first correction; the current workflow is manual-only, read-only, action-SHA-pinned and credential-free.
 
 First actual CI run: https://github.com/QuentinBtd/NavarchNet/actions/runs/39258272015.
 
 - Backend/PostgreSQL/type/UI/browser verification passed remotely.
 - Native x86_64 and ARM64 cargo-dist packaging/checksums and real packaged-binary PostgreSQL/HTTP crash-recovery smoke both passed remotely. These are executed gates, not merely configured targets.
-- The production container image built, started with real PostgreSQL, became healthy, served the authenticated API and passed the non-root-user check. The restart gate then failed because that runner's Compose `start` command rejects `--wait`. The workflow correction uses the documented `compose up --no-build --wait --wait-timeout 60 app`; subsequent run results are visible in the PR checks. Do not treat the failed initial restart gate as passed.
+- The initial container restart gate failed because that runner's Compose `start` rejects `--wait`. The correction uses `compose up --no-build --wait --wait-timeout 60 app`. Historical baseline run https://github.com/QuentinBtd/NavarchNet/actions/runs/39259426136 then passed all four jobs, including the actual container restart/non-root checks. This qualifies only baseline commit `65ddcce8f55fdd04d98bda45e6281e0fafde5de9`, not the current uncommitted AWS source.
 - No local Docker/Podman/Buildah/nerdctl runtime or Docker socket was available. Container execution therefore depends on actual CI evidence, not a claimed local run.
 - GitHub's unrelated Actions-permissions admin read endpoint returned HTTP 403, but ordinary branch/workflow pushes, PR creation and all four CI jobs were allowed. No authentication change or credential bypass was used.
 
 ## Remaining acceptance scope
 
-- Actual AWS SDK standard-chain/AssumeRole onboarding, refresh/session attribution, role verification, paginated live discovery, ownership/adoption and read-only topology.
+- Fresh independent review and further read-only coverage: TGW route contents, complete effective-route analysis and remaining protocol boundaries. Live role onboarding/discovery/IAM evaluation and all cloud acceptance remain unexecuted; metadata consent does not grant route-management permission.
 - Action-level TGW/RAM/zonal-NAT/forward-and-return routing execution, external-side-effect stale-worker/crash recovery and actual isolated multi-account egress acceptance.
 - Complete browser OIDC authorization-code/PKCE flow, automatic JWKS rotation, production database privilege separation, cursor pagination/retention and supported safe connection migration/deletion.
-- Maintainer-gated publication automation, versioned GHCR images, GitHub Releases and verified standard SBOM/provenance. Container restart correction requires its actual subsequent CI gate; publication is still explicitly unexecuted.
+- Maintainer-gated publication automation, versioned GHCR images, GitHub Releases and verified standard SBOM/provenance. Current AWS source has not been requalified as native x64/ARM64 archives or containers; historical successful packages are not evidence for this delta. Publication is explicitly unexecuted.
 - Authenticated/versioned probe ingestion and deployed probes/automatic failover are future scope; active connectivity remains explicitly untested.
 
 Raw validation logs, independent review verdicts, exact remote write/readbacks and the durable handoff are under `/root/.hermes/navarchnet-autonomy/` for this mission. See docs/testing.md, docs/releases.md and docs/aws-onboarding.md for precise boundaries and remaining procedures.

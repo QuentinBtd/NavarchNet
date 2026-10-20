@@ -1,4 +1,8 @@
-use navarchnet::{api::*, domain::*};
+use navarchnet::{
+    api::*,
+    aws::{observation::*, routing::*, *},
+    domain::*,
+};
 use ts_rs::{Config, TS};
 fn main() {
     let config = Config::default();
@@ -21,6 +25,21 @@ fn main() {
         RegisterAccount,
         CreateNetwork,
         ApplyPlan,
-        ApiError
+        ApiError,
+        RoleRegistration,
+        VerifiedAccount,
+        AdoptionConsent,
+        AdoptionRecord,
+        TopologyView,
+        AwsTopology,
+        ResourceKind,
+        AwsResource,
+        ObservedRoute,
+        RouteAssociation,
+        TransitGatewayTableLink,
+        SubnetRouteTable,
+        RouteTableSelection,
+        RouteSelectionReason,
+        AssociationSource
     );
 }

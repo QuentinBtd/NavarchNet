@@ -1,9 +1,13 @@
-name: CI
+name: Manual validation
 on:
-  pull_request:
-  push:
-    branches: [main]
   workflow_dispatch:
+    inputs:
+      suite:
+        description: Explicit qualification to run (uses GitHub Actions minutes)
+        required: true
+        default: verify
+        type: choice
+        options: [verify, containers, packages, all]
 permissions:
   contents: read
 concurrency:
@@ -11,6 +15,7 @@ concurrency:
   cancel-in-progress: true
 jobs:
   verify:
+    if: inputs.suite == 'verify' || inputs.suite == 'all'
     runs-on: ubuntu-24.04
     timeout-minutes: 40
     services:
@@ -34,28 +39,23 @@ jobs:
       - uses: actions/checkout@d23441a48e516b6c34aea4fa41551a30e30af803 # v6
         with:
           persist-credentials: false
-      - uses: actions/setup-node@249970729cb0ef3589644e2896645e5dc5ba9c38 # v6
+      - uses: jdx/mise-action@fc42bcc7ddbf51124c30f95a877a0c5168a3bfde # v5.2.1
         with:
-          node-version: 24.22.0
-          cache: npm
-          cache-dependency-path: frontend/package-lock.json
-      - name: Install pinned Rust toolchain
-        run: rustup toolchain install 1.99.0 --profile minimal --component rustfmt --component clippy
+          version: 2026.9.18
+          persist_github_token: false
       - uses: Swatinem/rust-cache@49a0bdc70d2e1b713ca9e2869b211fcce03d3c1c # v2
         with:
           save-if: ${{ github.ref == 'refs/heads/main' }}
       - name: Format, lint, migrations, PostgreSQL, UI, type contract and crash smoke
-        run: sh scripts/check.sh
+        run: mise run check
       - name: License notices and dependency security policy
-        run: |
-          sh scripts/install-tools.sh deny
-          .local/tools/bin/cargo-deny --locked check
-          npm --prefix frontend audit --audit-level=high
-          node scripts/notices.mjs --check
+        run: mise run audit
       - name: Install isolated browser runtime
-        run: frontend/node_modules/.bin/playwright install --with-deps chromium
+        run: |
+          mise exec -- frontend/node_modules/.bin/playwright install-deps chromium
+          mise run browser-install
       - name: Real browser, backend and PostgreSQL journey
-        run: npm --prefix frontend run e2e
+        run: mise run browser
       - uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4
         if: failure()
         with:
@@ -63,34 +63,25 @@ jobs:
           path: frontend/test-results/
           retention-days: 7
   containers:
+    if: inputs.suite == 'containers' || inputs.suite == 'all'
     runs-on: ubuntu-24.04
     timeout-minutes: 40
     steps:
       - uses: actions/checkout@d23441a48e516b6c34aea4fa41551a30e30af803 # v6
         with:
           persist-credentials: false
+      - uses: jdx/mise-action@fc42bcc7ddbf51124c30f95a877a0c5168a3bfde # v5.2.1
+        with:
+          version: 2026.9.18
+          persist_github_token: false
       - name: Build and exercise credential-free container demo
         env:
           DATABASE_PASSWORD: ci-only-disposable-database
           NAVARCHNET_ADMIN_TOKEN: ci-only-demo-admin-token-not-a-secret-0001
           NAVARCHNET_READER_TOKEN: ci-only-demo-reader-token-not-a-secret-0002
-        run: |
-          docker compose config --quiet
-          docker compose up --build --wait --wait-timeout 180
-          curl --fail http://127.0.0.1:8080/readyz
-          curl --fail -H "Authorization: Bearer $NAVARCHNET_ADMIN_TOKEN" http://127.0.0.1:8080/api/v1/snapshot
-          test "$(docker compose exec -T app id -u)" = 65532
-          docker compose stop app
-          docker compose up --no-build --wait --wait-timeout 60 app
-          curl --fail http://127.0.0.1:8080/readyz
-      - name: Teardown disposable database
-        if: always()
-        env:
-          DATABASE_PASSWORD: ci-only-disposable-database
-          NAVARCHNET_ADMIN_TOKEN: ci-only-demo-admin-token-not-a-secret-0001
-          NAVARCHNET_READER_TOKEN: ci-only-demo-reader-token-not-a-secret-0002
-        run: docker compose down --volumes
+        run: mise run containers
   package-dry-run:
+    if: inputs.suite == 'packages' || inputs.suite == 'all'
     services:
       postgres:
         image: postgres:17.11-bookworm@sha256:3645570cccdfa447589da9f57dd740faa29b30938e861289a5574b6ca6b03826
@@ -121,12 +112,10 @@ jobs:
       - uses: actions/checkout@d23441a48e516b6c34aea4fa41551a30e30af803 # v6
         with:
           persist-credentials: false
-      - uses: actions/setup-node@249970729cb0ef3589644e2896645e5dc5ba9c38 # v6
+      - uses: jdx/mise-action@fc42bcc7ddbf51124c30f95a877a0c5168a3bfde # v5.2.1
         with:
-          node-version: 24.22.0
-          cache: npm
-          cache-dependency-path: frontend/package-lock.json
-      - run: rustup toolchain install 1.99.0 --profile minimal
+          version: 2026.9.18
+          persist_github_token: false
       - uses: Swatinem/rust-cache@49a0bdc70d2e1b713ca9e2869b211fcce03d3c1c # v2
         with:
           save-if: ${{ github.ref == 'refs/heads/main' }}
@@ -134,19 +123,13 @@ jobs:
       - name: Build frontend and package without publishing
         env:
           DIST_TARGET: ${{ matrix.target }}
-        run: |
-          npm --prefix frontend ci --ignore-scripts --no-fund
-          npm --prefix frontend run build
-          sh scripts/install-tools.sh dist
-          .local/tools/bin/dist plan --output-format=json > dist-plan.json
-          .local/tools/bin/dist build --artifacts=local --target="$DIST_TARGET"
-          sh scripts/verify-package.sh "$DIST_TARGET"
+        run: mise run package
       - uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4
         with:
           name: package-dry-run-${{ matrix.target }}
           path: |
             target/distrib/*.tar.xz
             target/distrib/*.sha256
-            dist-plan.json
+            .local/reports/dist-plan.json
           if-no-files-found: error
           retention-days: 7

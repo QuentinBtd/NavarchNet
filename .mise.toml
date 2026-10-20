@@ -1,0 +1,121 @@
+min_version = "2026.9.18"
+
+[tools]
+rust = { version = "1.99.0", profile = "minimal", components = ["rustfmt", "clippy"] }
+node = "24.22.0"
+prek = "0.5.6"
+actionlint = "1.7.12"
+
+[settings]
+jobs = 1
+
+[env]
+CARGO_BUILD_JOBS = "1"
+CARGO_INCREMENTAL = "0"
+CARGO_PROFILE_DEV_DEBUG = "0"
+CARGO_PROFILE_TEST_DEBUG = "0"
+RUST_TEST_THREADS = "1"
+CARGO_HOME = "{{ env.CARGO_HOME | default(value=config_root ~ '/.local/cargo') }}"
+CARGO_TARGET_DIR = "{{ env.CARGO_TARGET_DIR | default(value=config_root ~ '/target') }}"
+NPM_CONFIG_CACHE = "{{ env.NPM_CONFIG_CACHE | default(value=config_root ~ '/.local/npm-cache') }}"
+PREK_HOME = "{{ env.PREK_HOME | default(value=config_root ~ '/.local/prek') }}"
+
+[tasks.frontend-install]
+description = "Install the locked frontend dependencies without lifecycle scripts"
+run = "npm --prefix frontend ci --ignore-scripts --no-fund"
+
+[tasks.fmt-check]
+description = "Check Rust formatting without compiling dependencies"
+run = "cargo fmt --all --check"
+
+[tasks.workflow-check]
+description = "Validate Actions syntax and enforce manual-only cost, pinning and permission policy"
+run = ["actionlint -shellcheck=", "node --test scripts/workflow-policy.test.mjs", "prek validate-config .pre-commit-config.yaml"]
+
+[tasks.lint]
+description = "Strict Rust all-target Clippy"
+run = "cargo clippy --locked --all-targets -- -D warnings"
+
+[tasks.unit]
+description = "Credential-free Rust unit, domain/property and OIDC tests (no database)"
+run = "cargo test --locked --lib --test domain --test oidc --test aws_model"
+
+[tasks.postgres]
+description = "Focused mandatory real PostgreSQL migrations and coordination tests"
+run = "sh scripts/require-db.sh cargo test --locked --test postgres --test api --test review_regressions --test aws_store --test aws_api"
+
+[tasks.backend]
+description = "Every Rust test, including real PostgreSQL; never skips missing infrastructure"
+run = "sh scripts/require-db.sh cargo test --locked"
+
+[tasks.contract]
+description = "Check the generated Rust/TypeScript API contract"
+run = "sh scripts/check-contract.sh"
+
+[tasks.frontend-check]
+description = "Type-check and lint the frontend"
+run = ["npm --prefix frontend run typecheck", "npm --prefix frontend run lint"]
+
+[tasks.frontend-test]
+description = "Run frontend behavior tests"
+run = "npm --prefix frontend test"
+
+[tasks.binary-contract-test]
+description = "Fast current-artifact receipt and shell-path rejection/quoting tests"
+run = "node --test scripts/server-binary.test.mjs"
+
+[tasks.frontend-build]
+description = "Build production static frontend assets"
+run = "npm --prefix frontend run build"
+
+[tasks.build]
+description = "Build the real server binary"
+run = "node scripts/build-server.mjs"
+
+[tasks.smoke]
+description = "Real HTTP, PostgreSQL and SIGKILL/restart recovery smoke (build first)"
+run = "sh scripts/require-db.sh env -u NAVARCHNET_BINARY node scripts/smoke.mjs"
+
+[tasks.browser-install]
+description = "Install the pinned Chromium runtime; OS libraries are a separate prerequisite"
+run = "frontend/node_modules/.bin/playwright install chromium"
+
+[tasks.binary-target-regression]
+description = "Explicit real obsolete-default vs alternate-target HTTP/browser regression (requires retained obsolete binary and real PostgreSQL)"
+run = "sh scripts/require-db.sh node scripts/binary-target-regression.mjs"
+
+[tasks.browser]
+description = "Real browser, production frontend, server and PostgreSQL journey (build first)"
+run = "sh scripts/require-db.sh npm --prefix frontend run e2e"
+
+[tasks.audit]
+description = "Dependency security/license policy and generated attribution checks"
+run = ["sh scripts/install-tools.sh deny", ".local/tools/bin/cargo-deny --locked check", "npm --prefix frontend audit --audit-level=high", "node scripts/notices.mjs --check"]
+
+[tasks.fast]
+description = "Fast pre-commit checks; run frontend-install once before committing"
+run = ["mise run workflow-check", "mise run fmt-check", "mise run binary-contract-test", "mise run frontend-check", "mise run frontend-test", "git diff --check"]
+
+[tasks.check]
+description = "Full source validation with actual PostgreSQL, build and crash smoke"
+run = ["mise run workflow-check", "mise run fmt-check", "mise run binary-contract-test", "mise run lint", "mise run backend", "mise run contract", "mise run frontend-install", "mise run frontend-check", "mise run frontend-test", "mise run frontend-build", "mise run build", "mise run smoke"]
+
+[tasks.full]
+description = "Pre-push source gate: check + security/licenses + real browser; fails if prerequisites are missing"
+run = ["mise run check", "mise run audit", "mise run browser"]
+
+[tasks.hooks-install]
+description = "Install repository-local pre-commit and full pre-push hooks"
+run = ["prek validate-config .pre-commit-config.yaml", "prek install --hook-type pre-commit --hook-type pre-push"]
+
+[tasks.hooks-check]
+description = "Run all pre-commit hooks on all tracked files"
+run = "prek run --all-files --stage pre-commit"
+
+[tasks.containers]
+description = "Explicit Docker Compose build/non-root/restart qualification; never automatic"
+run = "sh scripts/container-smoke.sh"
+
+[tasks.package]
+description = "Explicit native cargo-dist archive/checksum/PostgreSQL crash qualification; no publication"
+run = "sh scripts/package-dry-run.sh"

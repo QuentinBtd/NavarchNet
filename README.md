@@ -2,7 +2,7 @@
 
 A self-hosted Rust/PostgreSQL network orchestration development preview. The working application provides a credential-free fake-provider journey from account registration and VPC discovery to an immutable plan, durable execution, result inspection, partial failure and drift reporting.
 
-This is not yet a complete AWS V1 implementation. AWS account onboarding, discovery and mutation are disabled. No fake-provider result proves AWS connectivity. Existing connection network/subnet replacement is rejected until a safe migration workflow exists.
+This is not yet a complete AWS V1 implementation. AWS onboarding and read-only discovery are implemented behind explicit OIDC-only enablement and a region allowlist; AWS mutation is disabled. Saved AWS topology and audited VPC/TGW metadata consent are separate from executable simulation plans. SDK replay/loopback/PostgreSQL fixtures exercise this slice, not a live account. No fake-provider result or provider-reported public IP proves AWS connectivity. Existing connection network/subnet replacement is rejected until a safe migration workflow exists.
 
 ## Quickstart
 
@@ -30,22 +30,25 @@ The listener defaults to 127.0.0.1:8080. Migrations run at startup. Demo authent
 
 ## Validation
 
-    DATABASE_URL=postgres://... sh scripts/check.sh
-    npx --prefix frontend playwright install chromium
-    DATABASE_URL=postgres://... npm --prefix frontend run e2e
+    mise install
+    mise run frontend-install
+    mise run hooks-install
+    mise run browser-install
+    DATABASE_URL=postgres://... mise run full
 
-The first command runs formatting, Clippy, backend tests (including real PostgreSQL), generated API type comparison, locked frontend installation, type checking, lint, behavior tests, production asset build and a real HTTP/process-crash smoke test. Browser tests exercise the built UI against the real backend and database. PostgreSQL tests fail if DATABASE_URL is absent; they do not silently skip.
+The exact `.mise.toml` pins the toolchain and shares validation between local development and opt-in CI. `prek` installs a fast pre-commit hook and a complete local pre-push hook. `mise run full` runs workflow-policy checks, formatting, Clippy, every Rust test (including real PostgreSQL), generated API type comparison, locked frontend installation, type checking, lint, behavior tests, production builds, HTTP/process-crash smoke, security/license checks and real browser tests. Missing database/browser prerequisites fail, never silently skip. `sh scripts/check.sh` remains an alias for `mise run check` (the source/build/crash subset).
 
-GitHub Actions runs automatically on pull requests and main. No cloud credentials are needed. See docs/testing.md for evidence boundaries and docs/STATUS.md for actual delivery status.
+Heavy GitHub Actions are manual-only through `workflow_dispatch`, with separate verify/container/package choices. Pushes and PRs do not repeatedly build Rust/SDKs, databases, browsers or ARM64 packages. Use the local mise tasks first; Actions are not a development test host. No cloud credentials are needed. See docs/testing.md for the full local/qualification boundary and docs/STATUS.md for actual delivery status.
 
 ## Documentation
 
 - docs/architecture.md and docs/adr/: module boundaries, persistence and safety choices
 - docs/configuration.md: authentication, configuration and OIDC access-token integration
 - docs/api.md: versioned API and generated TypeScript contract
-- docs/aws-onboarding.md: explicitly unimplemented AWS lane, role trust, routing and RAM prerequisites
+- docs/aws-onboarding.md: opt-in AWS read-only scope, role/session policy, routing/RAM prerequisites and unexecuted live qualification
 - docs/operations.md: shutdown, diagnosis, recovery, backup and upgrades
 - docs/testing.md: local/CI tests and opt-in AWS acceptance
+- docs/floci-evaluation.md: pinned optional emulator coverage/gaps and unexecuted provider compatibility
 - docs/releases.md: packaging dry runs and explicit publication ownership
 - docs/sources.md: primary source and decision ledger
 - SECURITY.md and CONTRIBUTING.md

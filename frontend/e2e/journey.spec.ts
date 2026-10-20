@@ -74,3 +74,35 @@ test("read-only session cannot mutate through UI or API", async ({ page, request
   });
   expect(response.status()).toBe(403);
 });
+
+test("real browser demo keeps AWS off and rejects role onboarding without changing saved metadata", async ({
+  page,
+  request,
+}) => {
+  const headers = { Authorization: "Bearer browser-test-admin-credential-free-local-only" };
+  const before = await (await request.get("/api/v1/snapshot", { headers })).json();
+  const catalog = await request.get("/api/v1/aws/accounts", { headers });
+  expect(catalog.status()).toBe(200);
+  expect(await catalog.json()).toEqual(before.aws_accounts);
+  await page.goto("/");
+  await page
+    .getByLabel("Demo token or OIDC access token")
+    .fill("browser-test-admin-credential-free-local-only");
+  await page.getByRole("button", { name: "Connect", exact: true }).click();
+  await expect(page.locator("#aws-access")).toContainText("AWS SDK access is disabled");
+  await expect(page.locator("#aws-register")).toBeHidden();
+  const response = await request.post("/api/v1/aws/accounts", {
+    headers,
+    data: {
+      name: "Rejected fixture",
+      role_arn: "arn:aws:iam::123456789012:role/Reader",
+      region: "eu-west-1",
+      external_id: null,
+    },
+  });
+  expect(response.status()).toBe(409);
+  expect((await response.json()).error).toContain("disabled");
+  const after = await (await request.get("/api/v1/snapshot", { headers })).json();
+  expect(after.aws_read_only_enabled).toBe(false);
+  expect(after.aws_accounts.length).toBe(before.aws_accounts.length);
+});
