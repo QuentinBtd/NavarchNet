@@ -59,6 +59,151 @@ it("renders supported target descriptions as inert text without claiming target 
     expect(form.querySelector("img")).toBeNull();
   }
 });
+function lifecycleResponse(
+  engine: "VPC" | "TGW",
+  destination: string,
+): VpcLookupResponse | TgwLookupResponse {
+  return engine === "VPC"
+    ? { ...value, destination }
+    : {
+        topology_id: "snapshot",
+        route_table_id: "table",
+        destination,
+        result: { status: "reported_blackhole", destination_cidr: "0.0.0.0/0" },
+        execution_enabled: false,
+        connectivity_tested: false,
+      };
+}
+function lifecycleForm(engine: "VPC" | "TGW", run: (destination: string) => Promise<unknown>) {
+  return engine === "VPC"
+    ? renderVpcLookup(
+        "snapshot",
+        "subnet-a",
+        selection,
+        0,
+        async (query) => (await run(query.destination)) as VpcLookupResponse,
+      )
+    : renderTgwLookup(
+        "snapshot",
+        "table",
+        0,
+        async (query) => (await run(query.destination)) as TgwLookupResponse,
+      );
+}
+for (const engine of ["VPC", "TGW"] as const) {
+  it(`${engine} clears a completed saved result when the destination changes`, async () => {
+    const form =
+      engine === "VPC"
+        ? render(value)
+        : renderTgwLookup("snapshot", "table", 0, async (query) => ({
+            topology_id: "snapshot",
+            route_table_id: "table",
+            destination: query.destination,
+            result: { status: "reported_blackhole", destination_cidr: "0.0.0.0/0" },
+            execution_enabled: false,
+            connectivity_tested: false,
+          }));
+    await submit(form);
+    expect(form.textContent).toContain("Reported");
+    const input = form.querySelector<HTMLInputElement>("input");
+    if (!input) throw new Error("Missing input");
+    input.value = "203.0.113.2";
+    input.dispatchEvent(new Event("input"));
+    expect(form.textContent).not.toContain("Reported");
+    expect(form.textContent).toContain("run another saved lookup");
+    expect(form.textContent).toContain(
+      engine === "VPC" ? "untested" : "not a full path or measured connectivity",
+    );
+  });
+  it(`${engine} retires pending input generations including ABA without old completion unlocking a newer request`, async () => {
+    for (const changedDestination of ["203.0.113.2", "203.0.113.1"]) {
+      for (const rejected of [false, true]) {
+        const pending: {
+          destination: string;
+          resolve: (value: unknown) => void;
+          reject: (reason: Error) => void;
+        }[] = [];
+        const form = lifecycleForm(
+          engine,
+          (destination) => new Promise((resolve, reject) => pending.push({ destination, resolve, reject })),
+        );
+        const input = form.querySelector<HTMLInputElement>("input");
+        const button = form.querySelector<HTMLButtonElement>("button");
+        const status = form.querySelector<HTMLElement>('[role="status"]');
+        if (!input || !button || !status) throw new Error("Missing lookup controls");
+        input.value = "203.0.113.1";
+        form.dispatchEvent(new Event("submit", { cancelable: true }));
+        form.dispatchEvent(new Event("submit", { cancelable: true }));
+        expect(pending).toHaveLength(1);
+        input.value = "203.0.113.2";
+        input.dispatchEvent(new Event("input"));
+        input.value = changedDestination;
+        input.dispatchEvent(new Event("change"));
+        expect(button.disabled).toBe(false);
+        expect(input.disabled).toBe(false);
+        form.dispatchEvent(new Event("submit", { cancelable: true }));
+        expect(pending).toHaveLength(2);
+        const old = pending[0],
+          current = pending[1];
+        if (!old || !current) throw new Error("Missing pending lookup");
+        if (rejected) old.reject(new Error("obsolete failure must not appear"));
+        else old.resolve(lifecycleResponse(engine, old.destination));
+        await new Promise<void>((resolve) => setTimeout(resolve, 0));
+        expect(status.textContent).toContain("Reading saved");
+        expect(button.disabled).toBe(true);
+        expect(input.disabled).toBe(true);
+        expect(status.textContent).not.toContain("obsolete failure");
+        current.resolve(lifecycleResponse(engine, current.destination));
+        await expect.poll(() => status.textContent).toContain(`Reported`);
+        expect(status.textContent).toContain(changedDestination);
+        expect(button.disabled).toBe(false);
+        expect(input.disabled).toBe(false);
+      }
+    }
+  });
+}
+for (const engine of ["VPC", "TGW"] as const) {
+  it(`${engine} restores controls after a current rejection or discard and permits a clean retry`, async () => {
+    for (const rejected of [false, true]) {
+      let calls = 0;
+      const form = lifecycleForm(engine, async (destination) => {
+        calls++;
+        if (calls === 1) {
+          if (rejected) throw new Error("current lookup failed");
+          return undefined;
+        }
+        return lifecycleResponse(engine, destination);
+      });
+      expect(await submit(form)).toContain(rejected ? "current lookup failed" : "Lookup discarded");
+      expect(await submit(form)).toContain("Reported");
+      expect(calls).toBe(2);
+    }
+  });
+  it(`${engine} discards success and error after an eventless value change without stranding controls`, async () => {
+    for (const rejected of [false, true]) {
+      let resolve: (value: unknown) => void = () => {};
+      let reject: (reason: Error) => void = () => {};
+      const pending = new Promise((yes, no) => {
+        resolve = yes;
+        reject = no;
+      });
+      const form = lifecycleForm(engine, async () => pending);
+      const input = form.querySelector<HTMLInputElement>("input");
+      const button = form.querySelector<HTMLButtonElement>("button");
+      if (!input || !button) throw new Error("Missing controls");
+      input.value = "203.0.113.1";
+      form.dispatchEvent(new Event("submit", { cancelable: true }));
+      input.value = "203.0.113.2";
+      if (rejected) reject(new Error("eventless obsolete error"));
+      else resolve(lifecycleResponse(engine, "203.0.113.1"));
+      await expect.poll(() => button.disabled).toBe(false);
+      expect(input.disabled).toBe(false);
+      expect(form.textContent).toContain("run another saved lookup");
+      expect(form.textContent).not.toContain("Reported");
+      expect(form.textContent).not.toContain("eventless obsolete error");
+    }
+  });
+}
 it("rejects changed subnet/table/source/destination and absent or enabled execution flags", async () => {
   for (const body of [
     { ...value, subnet_id: "other" },

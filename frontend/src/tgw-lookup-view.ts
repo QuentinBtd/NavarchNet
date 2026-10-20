@@ -19,20 +19,31 @@ export function renderTgwLookup(
   input.placeholder = "203.0.113.1 or 2001:db8::1";
   const submit = text("button", "Look up saved TGW route");
   submit.type = "submit";
-  const output = text("p", "Offline table lookup only; not a full path or measured connectivity.");
+  const caveat = "Offline table lookup only; not a full path or measured connectivity.";
+  const output = text("p", caveat);
   output.setAttribute("role", "status");
   output.setAttribute("aria-live", "polite");
   form.append(label, input, submit, output);
+  let generation = 0;
+  const changed = () => {
+    generation++;
+    submit.disabled = input.disabled = false;
+    output.textContent = `Inputs changed; run another saved lookup. ${caveat}`;
+  };
+  input.oninput = input.onchange = changed;
   form.onsubmit = (event) => {
     event.preventDefault();
     if (submit.disabled) return;
     const query = { route_table_id: tableId, destination: input.value };
+    const version = ++generation;
+    const current = () => version === generation && input.value === query.destination;
     submit.disabled = true;
     input.disabled = true;
     output.textContent = "Reading saved table observation…";
     void (async () => {
       try {
         const value = await lookup(query);
+        if (!current()) return;
         if (!value) {
           output.textContent = "Lookup discarded; view or session changed.";
           return;
@@ -57,10 +68,12 @@ export function renderTgwLookup(
               : `Unresolved: ${result.reason}`;
         output.textContent = `${description}. Saved observation only; not a full path or measured connectivity.`;
       } catch (error) {
-        output.textContent = error instanceof Error ? error.message : "Saved lookup failed";
+        if (current()) output.textContent = error instanceof Error ? error.message : "Saved lookup failed";
       } finally {
-        submit.disabled = false;
-        input.disabled = false;
+        if (version === generation) {
+          if (!current()) output.textContent = `Inputs changed; run another saved lookup. ${caveat}`;
+          submit.disabled = input.disabled = false;
+        }
       }
     })();
   };

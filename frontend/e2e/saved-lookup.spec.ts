@@ -57,6 +57,9 @@ test("real browser: reader looks up saved TGW forward, blackhole and unresolved 
     await expect(form.getByRole("status")).toContainText(expected);
     await expect(form.getByRole("status")).toContainText("not a full path or measured connectivity");
     await expect(submit).toBeEnabled();
+    await input.fill("203.0.113.250");
+    await expect(form.getByRole("status")).not.toContainText("Reported table match");
+    await expect(form.getByRole("status")).toContainText("run another saved lookup");
   }
   await expect(page.locator("#aws-topology")).toContainText("<img src=x onerror=alert(1)>");
   await expect(page.locator("#aws-topology img")).toHaveCount(0);

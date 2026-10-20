@@ -41,16 +41,26 @@ export function renderVpcLookup(
   output.setAttribute("role", "status");
   output.setAttribute("aria-live", "polite");
   form.append(label, input, submit, output);
+  let generation = 0;
+  const changed = () => {
+    generation++;
+    submit.disabled = input.disabled = false;
+    output.textContent = `Inputs changed; run another saved lookup. ${caveat}`;
+  };
+  input.oninput = input.onchange = changed;
   form.onsubmit = (event) => {
     event.preventDefault();
     if (submit.disabled) return;
     const query = { subnet_id: subnetId, destination: input.value };
+    const version = ++generation;
+    const current = () => version === generation && input.value === query.destination;
     submit.disabled = true;
     input.disabled = true;
     output.textContent = "Reading saved subnet observation…";
     void (async () => {
       try {
         const value = await lookup(query);
+        if (!current()) return;
         if (!value) {
           output.textContent = "Lookup discarded; view or session changed.";
           return;
@@ -105,10 +115,13 @@ export function renderVpcLookup(
         }
         output.textContent = `${description}. ${caveat}`;
       } catch (error) {
-        output.textContent = error instanceof Error ? error.message : "Saved subnet lookup failed";
+        if (current())
+          output.textContent = error instanceof Error ? error.message : "Saved subnet lookup failed";
       } finally {
-        submit.disabled = false;
-        input.disabled = false;
+        if (version === generation) {
+          if (!current()) output.textContent = `Inputs changed; run another saved lookup. ${caveat}`;
+          submit.disabled = input.disabled = false;
+        }
       }
     })();
   };

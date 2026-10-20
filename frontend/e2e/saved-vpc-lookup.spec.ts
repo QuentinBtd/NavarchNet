@@ -65,6 +65,9 @@ test("real browser: reader inspects saved subnet entries, blackholes and reserve
     await expect(form.getByRole("status")).toContainText(expected);
     await expect(form.getByRole("status")).toContainText("target health and connectivity remain untested");
     await expect(submit).toBeEnabled();
+    await input.fill("203.0.113.250");
+    await expect(form.getByRole("status")).not.toContainText("Reported subnet entry");
+    await expect(form.getByRole("status")).toContainText("run another saved lookup");
   }
   await expect(page.locator("#aws-topology")).toContainText("Application subnet <img src=x>");
   await expect(page.locator("#aws-topology img")).toHaveCount(0);
