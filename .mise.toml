@@ -42,7 +42,7 @@ run = "cargo test --locked --lib --test domain --test oidc --test aws_model"
 
 [tasks.postgres]
 description = "Focused mandatory real PostgreSQL migrations and coordination tests"
-run = "sh scripts/require-db.sh cargo test --locked --test postgres --test api --test review_regressions --test aws_store --test aws_saved_reader --test aws_api --test external_effects"
+run = "sh scripts/require-db.sh cargo test --locked --test postgres --test api --test review_regressions --test aws_store --test aws_saved_reader --test aws_api --test aws_source_cidr_api --test external_effects"
 
 [tasks.backend]
 description = "Every Rust test, including real PostgreSQL; never skips missing infrastructure"

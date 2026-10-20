@@ -20,6 +20,7 @@ use serde::{Deserialize, Serialize};
 use std::sync::Arc;
 use tower_http::{services::ServeDir, set_header::SetResponseHeaderLayer};
 use ts_rs::TS;
+mod source_cidr;
 
 #[derive(Clone)]
 pub struct AppState {
@@ -254,6 +255,10 @@ pub fn router(state: AppState) -> Router {
         .route(
             "/aws/accounts/{id}/tgw-source-lookup",
             get(lookup_aws_source),
+        )
+        .route(
+            "/aws/accounts/{id}/tgw-source-cidr-coverage",
+            get(source_cidr::coverage),
         )
         .route(
             "/aws/accounts/{id}/tgw-target-lookup",

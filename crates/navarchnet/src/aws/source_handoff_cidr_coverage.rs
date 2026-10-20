@@ -207,7 +207,7 @@ fn address(value: u128, v4: bool) -> Result<String> {
         Ipv6Addr::from(value).to_string()
     })
 }
-fn validate_query(q: &SourceHandoffCidrQuery) -> Result<IpNet> {
+pub(crate) fn validate_query(q: &SourceHandoffCidrQuery) -> Result<IpNet> {
     for (field, value) in [
         ("source_account_id", q.source_account_id.as_str()),
         ("network_account_id", q.network_account_id.as_str()),

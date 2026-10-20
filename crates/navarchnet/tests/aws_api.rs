@@ -1813,6 +1813,13 @@ async fn saved_source_handoff_binds_two_account_snapshots_and_az_without_writes(
         "/aws/accounts/{}/tgw-source-lookup?network_account_id={}&subnet_id=subnet-source&destination=203.0.113.1",
         source_account.id, network_account.id
     );
+    let cidr_path = format!(
+        "/aws/accounts/{}/tgw-source-cidr-coverage?network_account_id={}&subnet_id=subnet-source&destination_cidr=203.0.113.0/29",
+        source_account.id, network_account.id
+    );
+    let (code, http_coverage) = request(&app, "GET", &cidr_path, Some(&reader), None).await?;
+    assert_eq!(code, StatusCode::OK);
+    assert_eq!(http_coverage, serde_json::to_value(&coverage)?);
     for cell in &coverage.segments {
         let (code, point) = request(
             &app,

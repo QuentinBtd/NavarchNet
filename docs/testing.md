@@ -50,7 +50,15 @@ Saved VPC and per-table TGW lookup lifecycle regressions exercise the older form
 
 ## What tests establish
 
-### Library-only exact source-to-TGW CIDR composition
+### Saved source-to-TGW CIDR reader API
+
+The existing real PostgreSQL/router source tracer first executed a missing-route 404-versus-200 RED, then GREEN with exact full JSON equality to the independently invoked core. Four additional HTTP/admission tests and two private mapper/remaining-allowance tests are GREEN coverage, not separately reproduced REDs. A closed nonconnecting pool proves auth/extraction/canonical checks precede database use. Unknown/missing/equal-duplicate/encoded-duplicate query fields, forbidden overrides, Unicode control/byte limits, canonical IPv4/IPv6 extrema, reader/admin and fixed redacted error shapes are exercised.
+
+Real PostgreSQL fixtures exercise either capture's missing/malformed/identity/true/null/missing-marker/oversized/individual-string/collection refusals, preserving raw registrations/fences/private hashes/saved rows/adoptions and audit/plans/operations/inventory around requests. Corrupt synthetic private/adoption JSON is ignored by this narrow route. Two individually admissible exact-1-MiB saved JSONB documents with ignored padding produce HTTP 413 on the shared read allowance even though their small typed models succeed in the pure core: resetting the second read would incorrectly pass. A separate successful raw HTTP body larger than 1 MiB equals independent compact core JSON byte-for-byte, with escaping, complete captures, pending-attempt preservation and same-registration reads. Its local body collector uses the actual 4-MiB response limit, not the older shared test helper's 1-MiB limit. Existing core exact output-cap/provenance/work/fan-out tests remain applicable; no new feature-specific browser or live AWS result is claimed.
+
+The first extra-fixture run hit an invalid adoption foreign key; the fixture was bound to its actual immutable saved row. A second fixture-preparation failure tried to deserialize deliberately poisoned private role JSON through the legacy discovery helper. Fixture preparation now allocates the existing SQL fence directly before INSERT, never updating an immutable topology. These were test setup failures, not product routing REDs, and no production guard was weakened.
+
+### Exact source-to-TGW CIDR composition core
 
 The existing source-handoff PostgreSQL tracer first failed compilation on the missing composition module, then passed using two real bounded saved reads with a shared remaining text allowance. It exhaustively compares a tiny `/29` with the unchanged point interpreter, including an interior TGW blackhole and source non-TGW route; actual existing authenticated point HTTP responses match each composed cell. Independent saved registrations/times and false markers remain bound, with unchanged saved readbacks/audit state and SDK access absent. This is library composition plus existing point HTTP acceptance, not a new CIDR HTTP/browser endpoint or an executed old routing bug.
 
