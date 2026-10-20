@@ -8,6 +8,7 @@ pub mod persistence;
 pub mod ram;
 pub mod route_lookup;
 pub mod routing;
+pub mod saved_observation;
 pub mod service;
 pub mod session;
 pub mod source_handoff;

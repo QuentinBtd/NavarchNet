@@ -38,6 +38,49 @@ async fn account(store: &Store) -> anyhow::Result<VerifiedAccount> {
         .await
 }
 #[tokio::test]
+async fn bounded_saved_reader_preserves_identity_without_derived_or_private_reads()
+-> anyhow::Result<()> {
+    use navarchnet::aws::saved_observation::SavedObservationReadBudget;
+    let (store, _) = support::isolated().await?;
+    let account = account(&store).await?;
+    let (_, _, generation) = store.begin_aws_discovery("operator", &account.id).await?;
+    let snapshot = topology(&account);
+    store
+        .finish_aws_discovery("operator", generation, &snapshot)
+        .await?;
+    let audit_before: i64 = sqlx::query_scalar("SELECT count(*) FROM audit")
+        .fetch_one(&store.pool)
+        .await?;
+    let read = store
+        .aws_saved_observation_bounded(&account.id, SavedObservationReadBudget::default())
+        .await?;
+    assert_eq!(read.saved_row_id, snapshot.id);
+    assert_eq!(read.generation, generation);
+    assert_eq!(
+        serde_json::to_value(&read.registration)?,
+        serde_json::to_value(&account)?
+    );
+    assert_eq!(
+        serde_json::to_value(&read.topology)?,
+        serde_json::to_value(&snapshot)?
+    );
+    let json = serde_json::to_string(&read)?;
+    assert!(!json.contains("fixture-external-private"));
+    assert!(!json.contains("subnet_route_tables") && !json.contains("adoptions"));
+    assert_eq!(
+        audit_before,
+        sqlx::query_scalar::<_, i64>("SELECT count(*) FROM audit")
+            .fetch_one(&store.pool)
+            .await?
+    );
+    assert!(
+        store.plans().await?.is_empty()
+            && store.operations().await?.is_empty()
+            && store.inventories().await?.is_empty()
+    );
+    Ok(())
+}
+#[tokio::test]
 async fn derives_subnet_table_selection_from_immutable_rows_and_reads_legacy_associations()
 -> anyhow::Result<()> {
     use navarchnet::aws::routing::{AssociationSource, RouteSelectionReason, RouteTableSelection};
