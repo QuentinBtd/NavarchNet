@@ -11,6 +11,7 @@ import type {
   RegisterAccount,
   RoleRegistration,
   Snapshot,
+  TgwLookupResponse,
   TopologyView,
   VerifiedAccount,
 } from "./generated";
@@ -196,6 +197,20 @@ async function loadAwsTopology(id: string) {
       onConsent: async (consent) => {
         await request(`/aws/accounts/${encodeURIComponent(id)}/adoptions`, consent);
         if (selectedAwsAccountId === id) await loadAwsTopology(id);
+      },
+      onLookup: async (query) => {
+        if (version !== awsViewVersion || selectedAwsAccountId !== id) return;
+        try {
+          const parameters = new URLSearchParams(query);
+          const result = await request<TgwLookupResponse>(
+            `/aws/accounts/${encodeURIComponent(id)}/tgw-route-lookup?${parameters}`,
+          );
+          if (version !== awsViewVersion || selectedAwsAccountId !== id) return;
+          return result;
+        } catch (error) {
+          if (version !== awsViewVersion || selectedAwsAccountId !== id) return;
+          throw error;
+        }
       },
     }),
   );

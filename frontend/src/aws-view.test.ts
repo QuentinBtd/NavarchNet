@@ -46,6 +46,68 @@ function fixture(): TopologyView {
   };
 }
 describe("read-only AWS observations", () => {
+  it("offers saved-table lookup to a reader and displays only a matching immutable snapshot response", async () => {
+    const view = fixture();
+    const row = view.topology.resources[0];
+    if (!row) throw new Error("Missing fixture");
+    row.kind = "transit_gateway_route_table";
+    const calls: unknown[] = [];
+    const node = renderAwsTopology(view, {
+      canConsent: false,
+      onConsent: async () => {},
+      onLookup: async (query) => {
+        calls.push(query);
+        return {
+          topology_id: "snapshot",
+          route_table_id: row.id,
+          destination: query.destination,
+          result: {
+            status: "reported_forward",
+            destination_cidr: "0.0.0.0/0",
+            route_type: "static",
+            attachment_ids: ["<img src=x>"],
+          },
+          execution_enabled: false,
+          connectivity_tested: false,
+        };
+      },
+    });
+    const form = node.querySelector<HTMLFormElement>("form[data-route-lookup]");
+    expect(form).not.toBeNull();
+    const input = form?.querySelector<HTMLInputElement>("input");
+    if (!input || !form) throw new Error("Saved lookup input missing");
+    input.value = "203.0.113.1";
+    form.dispatchEvent(new Event("submit", { cancelable: true }));
+    await expect.poll(() => node.textContent).toContain("Reported table match");
+    expect(calls).toEqual([{ route_table_id: row.id, destination: "203.0.113.1" }]);
+    expect(node.textContent).toContain("not a full path or measured connectivity");
+    expect(node.querySelector("img")).toBeNull();
+  });
+  it("refuses a response from a different saved snapshot", async () => {
+    const view = fixture();
+    const row = view.topology.resources[0];
+    if (!row) throw new Error("Missing fixture");
+    row.kind = "transit_gateway_route_table";
+    const node = renderAwsTopology(view, {
+      canConsent: false,
+      onConsent: async () => {},
+      onLookup: async (query) => ({
+        topology_id: "newer-snapshot",
+        route_table_id: row.id,
+        destination: query.destination,
+        result: { status: "reported_blackhole", destination_cidr: "0.0.0.0/0" },
+        execution_enabled: false,
+        connectivity_tested: false,
+      }),
+    });
+    const form = node.querySelector<HTMLFormElement>("form[data-route-lookup]");
+    const input = form?.querySelector<HTMLInputElement>("input");
+    if (!form || !input) throw new Error("Saved lookup form missing");
+    input.value = "203.0.113.1";
+    form.dispatchEvent(new Event("submit", { cancelable: true }));
+    await expect.poll(() => node.textContent).toContain("Snapshot changed; refresh the saved observation");
+    expect(node.textContent).not.toContain("Reported blackhole");
+  });
   it("shows unknown, completed empty and typed TGW routes without resolving prefix lists or claiming forwarding", () => {
     const view = fixture();
     const row = view.topology.resources[0];

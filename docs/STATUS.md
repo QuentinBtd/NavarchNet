@@ -2,7 +2,11 @@
 
 NavarchNet has an implemented fake-provider journey and a locally exercised AWS read-only account/topology slice, not a completed AWS V1 orchestrator. No live AWS API call/resource mutation, release/tag publication, crates.io upload or GHCR upload has occurred.
 
-## Current TGW route-content continuation (uncommitted)
+## Current saved-lookup operator journey (uncommitted)
+
+The route-content/per-table API checkpoint is independently reviewed and backed up as 5343491c428ddbdb4a37e3180d97194cc60b336f. New UI work lets an authenticated reader enter a destination IP in a saved TGW table card and query that existing offline API, even with SDK access disabled. Response snapshot/table/destination and disabled-execution/connectivity scope must match before display. Account/view generation and logout discard stale responses. Deferred HTTP fixtures exercise real main.ts/session/renderer integration, not cloud or browser data-plane acceptance. Fresh complete validation and independent review remain required before another push; prior approval does not cover this UI delta.
+
+## Reviewed TGW route-content and per-table lookup checkpoint
 
 The reviewed R1/S1/read-only checkpoint is backed up on draft PR1 at c8143cbc0704c6120851c4b41bc72033f2f73b0b; its independent approval is scoped to that boundary. New local work captures typed static/propagated TGW routes, nested attachment/state/prefix-list/announcement metadata, explicit completion/continuation guards and separate route/attachment budgets. RED/GREEN protocol, STS policy, PostgreSQL legacy-row/limit and UI fixtures are retained. A pure offline per-table lookup and authenticated saved-snapshot lookup API add longest-prefix/static-priority analysis with explicit unknown/blackhole results. These do not resolve ingress association, prefix-list entries, BGP backups, SG/NACL, NAT/return routing or full egress/isolation. The actual full prek/mise gate passed 53 Rust tests (zero failed/ignored), 11 frontend, 3 browser, 4 workflow-policy and 6 binary-contract tests, real PostgreSQL/crash recovery and existing strict type/Clippy/build/contract/audit gates against the alternate target. Fresh review of this new work remains pending; no previous approval is reused.
 

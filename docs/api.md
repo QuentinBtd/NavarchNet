@@ -33,6 +33,8 @@ TGW table resources also include typed `tgw_associations`, `tgw_propagations` an
 
 AWS timestamps are UNIX seconds encoded as strings. Accounts are capped at 500; observations/consents at 10,000 resources and persisted snapshots at 32 MiB. These are hard admission limits, not cursor pagination. The frontend initially renders 200 resources and explicitly offers more. See [onboarding](aws-onboarding.md) for query coverage and unsupported topology.
 
+The saved AWS table card offers a destination-IP lookup to authenticated readers without enabling SDK discovery or writes. The UI binds the response to the displayed snapshot/table/destination and rejects unexpected execution/connectivity flags. A newer snapshot requires refresh; account/view/session changes discard late responses. This is an offline query, not a network probe, route change or end-to-end path calculation.
+
 The authoritative typed JSON structures live in Rust `domain` and `api`; `cargo run --locked --bin export-types` generates `frontend/src/generated.ts`. CI compares regeneration byte-for-byte and type-checks the UI. This prevents structural type drift, not every semantic contract regression; API/browser tests provide independent behavior checks.
 
 `Fault` scenarios are `none`, `throttle`, `persistent_throttle`, `eventual_consistency`, `credential_expiry`, `permission`, `partial_failure`. These simulate provider outcomes; no AWS call or real session expiry is exercised. A probe measurement ingestion route is deliberately not exposed until its authentication/replay/versioning contract is implemented.

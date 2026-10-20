@@ -1,8 +1,13 @@
 import type { AdoptionConsent, TopologyView } from "./generated";
+import { renderTgwLookup, type SavedLookup } from "./tgw-lookup-view";
 import { text } from "./view";
 export function renderAwsTopology(
   view: TopologyView,
-  options: { canConsent: boolean; onConsent: (consent: AdoptionConsent) => Promise<void> },
+  options: {
+    canConsent: boolean;
+    onConsent: (consent: AdoptionConsent) => Promise<void>;
+    onLookup?: SavedLookup;
+  },
 ): HTMLElement {
   const root = document.createElement("section");
   const topology = view.topology;
@@ -106,6 +111,8 @@ export function renderAwsTopology(
         if (resource.kind === "transit_gateway_route_table") {
           const detail = document.createElement("details");
           detail.append(text("summary", "Observed TGW table relationships"));
+          if (options.onLookup)
+            detail.append(renderTgwLookup(topology.id, resource.id, index, options.onLookup));
           detail.append(
             text(
               "p",
