@@ -250,6 +250,13 @@ pub(crate) fn check_serialized<T: Serialize>(
     value: &T,
     limit: usize,
 ) -> Result<(), VpcCidrCoverageError> {
+    serialized_size(value, limit).map(|_| ())
+}
+/// Exact bounded byte count, also used for nonquadratic composed response accounting.
+pub(crate) fn serialized_size<T: Serialize>(
+    value: &T,
+    limit: usize,
+) -> Result<usize, VpcCidrCoverageError> {
     struct Counter {
         bytes: usize,
         limit: usize,
@@ -281,7 +288,8 @@ pub(crate) fn check_serialized<T: Serialize>(
         } else {
             VpcCidrCoverageError::PartitionProofUnavailable
         }
-    })
+    })?;
+    Ok(counter.bytes)
 }
 /// Uniformity proof (for this VPC interpreter ONLY): fixed scope/readiness/owner/association and
 /// table poison are destination-independent. All varying predicates are membership in each valid

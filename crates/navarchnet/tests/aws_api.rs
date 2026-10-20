@@ -1611,6 +1611,10 @@ async fn saved_source_handoff_binds_two_account_snapshots_and_az_without_writes(
         origin: Some("CreateRoute".into()),
         targets: [("transitGatewayId".into(), "tgw-handoff".into())].into(),
     });
+    let mut non_tgw = source_table.routes[0].clone();
+    non_tgw.ipv4_destination = Some("203.0.113.4/30".into());
+    non_tgw.targets = [("natGatewayId".into(), "nat-literal".into())].into();
+    source_table.routes.push(non_tgw);
     let gateway = owned(ResourceKind::TransitGateway, "tgw-handoff", "210987654321");
     let mut attachment = owned(
         ResourceKind::VpcAttachment,
@@ -1644,6 +1648,11 @@ async fn saved_source_handoff_binds_two_account_snapshots_and_az_without_writes(
             resource_type: Some("vpc".into()),
         }],
     }]);
+    let mut internal = network_table.tgw_routes.as_ref().unwrap()[0].clone();
+    internal.destination_cidr = Some("203.0.113.2/31".into());
+    internal.state = Some("blackhole".into());
+    internal.attachments.clear();
+    network_table.tgw_routes.as_mut().unwrap().push(internal);
     let snapshot = |account: &VerifiedAccount, resources, completed: &str| AwsTopology {
         id: uuid::Uuid::new_v4().to_string(),
         account_id: account.id.clone(),
@@ -1718,9 +1727,82 @@ async fn saved_source_handoff_binds_two_account_snapshots_and_az_without_writes(
         serde_json::to_value(store.aws_topology(&source_account.id).await?)?,
         serde_json::to_value(store.aws_topology(&network_account.id).await?)?,
     ];
+    // Real saved-reader composition; the existing HTTP point assertions remain independent below.
+    use navarchnet::aws::{
+        saved_observation::SavedObservationReadBudget,
+        source_handoff_cidr_coverage::{self, SourceHandoffCidrBudget, SourceHandoffCidrQuery},
+    };
+    let composition_audit: i64 = sqlx::query_scalar("SELECT count(*) FROM audit")
+        .fetch_one(&store.pool)
+        .await?;
+    let read_budget = SavedObservationReadBudget::default();
+    let saved_source = store
+        .aws_saved_observation_bounded(&source_account.id, read_budget)
+        .await?;
+    let saved_network = store
+        .aws_saved_observation_bounded(
+            &network_account.id,
+            SavedObservationReadBudget {
+                total_bytes: read_budget
+                    .total_bytes
+                    .checked_sub(saved_source.admitted_bytes)
+                    .unwrap(),
+                ..read_budget
+            },
+        )
+        .await?;
+    let coverage = source_handoff_cidr_coverage::analyze(
+        saved_source,
+        saved_network,
+        SourceHandoffCidrQuery {
+            source_account_id: source_account.id.clone(),
+            network_account_id: network_account.id.clone(),
+            subnet_id: "subnet-source".into(),
+            destination_cidr: "203.0.113.0/29".into(),
+        },
+        SourceHandoffCidrBudget::default(),
+    )?;
+    assert!(coverage.partition_complete && coverage.reference_only);
+    assert!(
+        !coverage.execution_enabled
+            && !coverage.connectivity_tested
+            && !coverage.simultaneous_snapshots
+    );
+    assert_eq!(coverage.source_saved.topology.id, source.id);
+    assert_eq!(coverage.network_saved.topology.id, network.id);
+    assert_eq!(
+        serde_json::to_value(&coverage.source_saved.registration)?,
+        serde_json::to_value(&source_account)?
+    );
+    assert_eq!(
+        serde_json::to_value(&coverage.network_saved.registration)?,
+        serde_json::to_value(&network_account)?
+    );
+    assert_eq!(coverage.source_saved.topology.completed_at, "3");
+    assert_eq!(coverage.network_saved.topology.completed_at, "7");
+    assert_eq!(coverage.segments.len(), 3);
+    for host in 0..8 {
+        let ip = format!("203.0.113.{host}");
+        let ordinal = u32::from(ip.parse::<std::net::Ipv4Addr>()?);
+        let cells: Vec<_> = coverage
+            .segments
+            .iter()
+            .filter(|cell| {
+                u32::from(cell.start.parse::<std::net::Ipv4Addr>().unwrap()) <= ordinal
+                    && ordinal
+                        <= u32::from(cell.end_inclusive.parse::<std::net::Ipv4Addr>().unwrap())
+            })
+            .collect();
+        assert_eq!(cells.len(), 1);
+        assert_eq!(
+            cells[0].result,
+            navarchnet::aws::source_handoff::lookup(&source, &network, "subnet-source", &ip)
+        );
+    }
     let audit_before: i64 = sqlx::query_scalar("SELECT count(*) FROM audit")
         .fetch_one(&store.pool)
         .await?;
+    assert_eq!(audit_before, composition_audit);
     let reader = "r".repeat(32);
     let app = api::router(AppState {
         store: store.clone(),
@@ -1731,6 +1813,26 @@ async fn saved_source_handoff_binds_two_account_snapshots_and_az_without_writes(
         "/aws/accounts/{}/tgw-source-lookup?network_account_id={}&subnet_id=subnet-source&destination=203.0.113.1",
         source_account.id, network_account.id
     );
+    for cell in &coverage.segments {
+        let (code, point) = request(
+            &app,
+            "GET",
+            &path.replace("203.0.113.1", &cell.start),
+            Some(&reader),
+            None,
+        )
+        .await?;
+        assert_eq!(code, StatusCode::OK);
+        assert_eq!(point["result"], serde_json::to_value(&cell.result)?);
+        assert_eq!(
+            point["source_topology_id"],
+            coverage.source_saved.topology.id
+        );
+        assert_eq!(
+            point["network_topology_id"],
+            coverage.network_saved.topology.id
+        );
+    }
     assert_eq!(
         request(&app, "GET", &path, None, None).await?.0,
         StatusCode::UNAUTHORIZED

@@ -163,7 +163,7 @@ pub fn lookup(
 }
 
 #[cfg(test)]
-mod tests {
+pub(super) mod tests {
     use super::*;
     use crate::aws::observation::*;
     fn row(kind: ResourceKind, id: &str, owner: &str) -> AwsResource {
@@ -172,7 +172,7 @@ mod tests {
         value.state = Some("available".into());
         value
     }
-    fn fixture() -> (AwsTopology, AwsTopology) {
+    pub(in crate::aws) fn fixture() -> (AwsTopology, AwsTopology) {
         let mut vpc = row(ResourceKind::Vpc, "vpc-source", "123456789012");
         vpc.cidrs.push("10.1.0.0/16".into());
         let mut subnet = row(ResourceKind::Subnet, "subnet-source", "123456789012");
