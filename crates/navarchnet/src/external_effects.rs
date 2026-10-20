@@ -4,7 +4,7 @@
 use crate::store::Store;
 use anyhow::{Context, ensure};
 use sqlx::{Row, postgres::PgRow};
-use std::future::Future;
+use std::{future::Future, time::Duration};
 
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct ExternalEffectIntent {
@@ -91,6 +91,9 @@ impl Store {
     /// Missing/incomplete/ambiguous evidence leaves dispatch uncertain; it never authorizes retry.
     /// The callback must independently read the exact intent's external scope. Token/hash equality
     /// alone does not prove real-provider identity, ownership, freshness or exactly-once execution.
+    /// A cooperatively yielding reader gets at most one requested lease interval to return evidence.
+    /// Timeout is an error, not absence: the marker/claim remain intact. Dropping this inline future
+    /// does not cancel remote work or detached tasks, bound database waits, or preempt blocking code.
     pub async fn recover_external_effect<F, Fut>(
         &self,
         id: &str,
@@ -126,7 +129,12 @@ impl Store {
             claim.directive() == EffectDirective::ObserveOnly,
             "Recovery is observe-only"
         );
-        let mut observation = observe(saved.clone()).await?;
+        let mut observation =
+            tokio::time::timeout(Duration::from_secs(u64::from(lease_seconds)), async {
+                observe(saved.clone()).await
+            })
+            .await
+            .context("External effect observation timed out; preserve intent and inspect")??;
         if !observation.complete {
             return Ok(RecoveryOutcome::ObservationIncomplete);
         }

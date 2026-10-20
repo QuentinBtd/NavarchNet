@@ -8,6 +8,168 @@ use navarchnet::{
 };
 
 #[tokio::test]
+async fn recovery_reader_timeout_preserves_uncertainty_before_a_fresh_observe_only_attempt()
+-> anyhow::Result<()> {
+    use std::sync::{
+        Arc,
+        atomic::{AtomicBool, Ordering},
+    };
+    use std::time::Duration;
+    struct DropFlag(Arc<AtomicBool>);
+    impl Drop for DropFlag {
+        fn drop(&mut self) {
+            self.0.store(true, Ordering::SeqCst);
+        }
+    }
+    let (store, _) = support::isolated().await?;
+    let (external, _) = support::isolated().await?;
+    sqlx::query("CREATE TABLE replay_resources(client_token text PRIMARY KEY, desired_sha256 text NOT NULL, external_id text NOT NULL)")
+        .execute(&external.pool).await?;
+    let intent = store
+        .prepare_external_effect("reader-timeout", "offline-create", &"d".repeat(64))
+        .await?;
+    let claim = store.claim_external_effect(&intent.id, 15).await?.unwrap();
+    let permit = store.begin_external_dispatch(&claim).await?;
+    // The independent effect exists, but a stalled reader cannot establish that fact.
+    sqlx::query("INSERT INTO replay_resources VALUES($1,$2,'timeout-replay')")
+        .bind(permit.client_token())
+        .bind(permit.desired_sha256())
+        .execute(&external.pool)
+        .await?;
+    sqlx::query("UPDATE external_effect_intents SET lease_until='-infinity' WHERE id=$1")
+        .bind(&intent.id)
+        .execute(&store.pool)
+        .await?;
+    let dropped = Arc::new(AtomicBool::new(false));
+    let flag = dropped.clone();
+    let result = tokio::time::timeout(
+        Duration::from_secs(3),
+        store.recover_external_effect(&intent.id, 1, |_| async move {
+            let _guard = DropFlag(flag);
+            std::future::pending::<anyhow::Result<ExternalEffectObservation>>().await
+        }),
+    )
+    .await;
+    assert!(
+        result.is_ok(),
+        "A stalled recovery reader must return within its lease-sized observation window"
+    );
+    let error = result.unwrap().unwrap_err();
+    assert!(
+        error.to_string().contains("observation timed out"),
+        "{error:#}"
+    );
+    assert!(
+        dropped.load(Ordering::SeqCst),
+        "The inline pending reader must be dropped"
+    );
+    let saved = store.external_effect(&intent.id).await?;
+    assert_eq!(saved.state, "dispatched");
+    assert_eq!(saved.client_token, intent.client_token);
+    assert_eq!(saved.desired_sha256, intent.desired_sha256);
+    assert!(saved.external_id.is_none());
+    let (fence, retained_deadline): (i64, bool) = sqlx::query_as("SELECT fence,lease_until <> '-infinity'::timestamptz FROM external_effect_intents WHERE id=$1")
+        .bind(&intent.id).fetch_one(&store.pool).await?;
+    assert!(fence > claim.fence());
+    assert!(
+        retained_deadline,
+        "Timeout must not clear or release the claim"
+    );
+    let next = store.claim_external_effect(&intent.id, 15).await?.unwrap();
+    assert!(next.fence() > fence);
+    assert_eq!(next.directive(), EffectDirective::ObserveOnly);
+    assert!(store.begin_external_dispatch(&next).await.is_err());
+    // Explicit fixture expiry retires this inspected claim, not the dispatch marker.
+    sqlx::query("UPDATE external_effect_intents SET lease_until='-infinity' WHERE id=$1")
+        .bind(&intent.id)
+        .execute(&store.pool)
+        .await?;
+    let outcome = store.recover_external_effect(&intent.id, 15, |saved| async {
+        let rows: Vec<(String, String, String)> = sqlx::query_as("SELECT client_token,desired_sha256,external_id FROM replay_resources WHERE client_token=$1")
+            .bind(saved.client_token).fetch_all(&external.pool).await?;
+        Ok(ExternalEffectObservation { complete: true, candidates: rows.into_iter().map(|(client_token, desired_sha256, external_id)| ObservedExternalEffect { client_token, desired_sha256, external_id }).collect() })
+    }).await?;
+    assert_eq!(
+        outcome,
+        RecoveryOutcome::Confirmed {
+            external_id: "timeout-replay".into()
+        }
+    );
+    let count: i64 = sqlx::query_scalar("SELECT count(*) FROM replay_resources")
+        .fetch_one(&external.pool)
+        .await?;
+    assert_eq!(count, 1);
+    Ok(())
+}
+
+#[tokio::test]
+async fn observation_timeout_does_not_cancel_an_independently_inflight_replay_effect()
+-> anyhow::Result<()> {
+    let (store, _) = support::isolated().await?;
+    let (external, _) = support::isolated().await?;
+    sqlx::query("CREATE TABLE replay_resources(client_token text PRIMARY KEY, desired_sha256 text NOT NULL, external_id text NOT NULL)")
+        .execute(&external.pool).await?;
+    let intent = store
+        .prepare_external_effect("late-replay", "offline-create", &"d".repeat(64))
+        .await?;
+    let claim = store.claim_external_effect(&intent.id, 15).await?.unwrap();
+    let permit = store.begin_external_dispatch(&claim).await?;
+    let (commit, wait) = tokio::sync::oneshot::channel::<()>();
+    let remote = external.clone();
+    // This dispatched effect is independent of the reader and cannot access the journal.
+    // Dropping the fixture gate on failure also lets this task exit rather than leak.
+    let inflight = tokio::spawn(async move {
+        wait.await?;
+        sqlx::query("INSERT INTO replay_resources VALUES($1,$2,'late-resource')")
+            .bind(permit.client_token())
+            .bind(permit.desired_sha256())
+            .execute(&remote.pool)
+            .await?;
+        Ok::<_, anyhow::Error>(())
+    });
+    sqlx::query("UPDATE external_effect_intents SET lease_until='-infinity' WHERE id=$1")
+        .bind(&intent.id)
+        .execute(&store.pool)
+        .await?;
+    let error = tokio::time::timeout(
+        std::time::Duration::from_secs(3),
+        store.recover_external_effect(&intent.id, 1, |_| async {
+            std::future::pending::<anyhow::Result<ExternalEffectObservation>>().await
+        }),
+    )
+    .await?
+    .unwrap_err();
+    assert!(error.to_string().contains("observation timed out"));
+    assert_eq!(store.external_effect(&intent.id).await?.state, "dispatched");
+    let count: i64 = sqlx::query_scalar("SELECT count(*) FROM replay_resources")
+        .fetch_one(&external.pool)
+        .await?;
+    assert_eq!(count, 0);
+    commit
+        .send(())
+        .expect("Independent replay task still awaits its commit gate");
+    inflight.await??;
+    // A late effect does not auto-confirm, clear the marker or authorize another dispatch.
+    assert_eq!(store.external_effect(&intent.id).await?.state, "dispatched");
+    let outcome = store.recover_external_effect(&intent.id, 15, |saved| async {
+        let rows: Vec<(String, String, String)> = sqlx::query_as("SELECT client_token,desired_sha256,external_id FROM replay_resources WHERE client_token=$1")
+            .bind(saved.client_token).fetch_all(&external.pool).await?;
+        Ok(ExternalEffectObservation { complete: true, candidates: rows.into_iter().map(|(client_token, desired_sha256, external_id)| ObservedExternalEffect { client_token, desired_sha256, external_id }).collect() })
+    }).await?;
+    assert_eq!(
+        outcome,
+        RecoveryOutcome::Confirmed {
+            external_id: "late-resource".into()
+        }
+    );
+    let count: i64 = sqlx::query_scalar("SELECT count(*) FROM replay_resources")
+        .fetch_one(&external.pool)
+        .await?;
+    assert_eq!(count, 1);
+    Ok(())
+}
+
+#[tokio::test]
 async fn recovery_driver_confirms_only_a_complete_unique_matching_replay_observation()
 -> anyhow::Result<()> {
     let (store, _) = support::isolated().await?;
