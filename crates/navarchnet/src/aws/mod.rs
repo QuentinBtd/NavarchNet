@@ -1,4 +1,5 @@
 //! AWS role references and read-only observations. Never model discovery as ownership.
+mod attachment_subnets;
 pub mod ec2;
 pub mod ingress_lookup;
 pub mod observation;
@@ -9,6 +10,7 @@ pub mod routing;
 pub mod service;
 pub mod session;
 pub mod source_handoff;
+pub mod target_lookup;
 pub mod vpc_lookup;
 use anyhow::{Context, ensure};
 use serde::{Deserialize, Serialize};

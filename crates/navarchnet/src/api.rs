@@ -124,6 +124,25 @@ pub struct TgwSourceResponse {
     pub execution_enabled: bool,
     pub connectivity_tested: bool,
 }
+#[derive(Deserialize, TS)]
+#[serde(deny_unknown_fields)]
+pub struct TgwTargetRequest {
+    pub transit_gateway_id: String,
+    pub target_attachment_id: String,
+    pub destination: String,
+}
+#[derive(Serialize, TS)]
+pub struct TgwTargetResponse {
+    pub topology_id: String,
+    pub completed_at: String,
+    pub transit_gateway_id: String,
+    pub target_attachment_id: String,
+    pub destination: String,
+    pub result: aws::target_lookup::TargetVpcLookup,
+    pub az_selection: aws::target_lookup::TargetAzSelection,
+    pub execution_enabled: bool,
+    pub connectivity_tested: bool,
+}
 impl From<anyhow::Error> for Failure {
     fn from(e: anyhow::Error) -> Self {
         Self(e)
@@ -164,6 +183,10 @@ pub fn router(state: AppState) -> Router {
         .route(
             "/aws/accounts/{id}/tgw-source-lookup",
             get(lookup_aws_source),
+        )
+        .route(
+            "/aws/accounts/{id}/tgw-target-lookup",
+            get(lookup_aws_target),
         )
         .route("/networks", post(create_network))
         .route("/plans", post(create_plan))
@@ -332,6 +355,36 @@ async fn lookup_aws_source(
         subnet_id: query.subnet_id,
         destination: query.destination,
         result,
+        execution_enabled: false,
+        connectivity_tested: false,
+    }))
+}
+async fn lookup_aws_target(
+    State(s): State<AppState>,
+    Path(id): Path<String>,
+    Query(query): Query<TgwTargetRequest>,
+) -> Result<Json<TgwTargetResponse>, Failure> {
+    if query.transit_gateway_id.len() > 2048
+        || query.target_attachment_id.len() > 2048
+        || query.destination.len() > 64
+    {
+        return Err(anyhow::anyhow!("Target lookup input exceeds its bound").into());
+    }
+    let topology = s.store.aws_topology(&id).await?.topology;
+    let result = aws::target_lookup::lookup(
+        &topology,
+        &query.transit_gateway_id,
+        &query.target_attachment_id,
+        &query.destination,
+    );
+    Ok(Json(TgwTargetResponse {
+        topology_id: topology.id,
+        completed_at: topology.completed_at,
+        transit_gateway_id: query.transit_gateway_id,
+        target_attachment_id: query.target_attachment_id,
+        destination: query.destination,
+        result,
+        az_selection: aws::target_lookup::TargetAzSelection::NotInferred,
         execution_enabled: false,
         connectivity_tested: false,
     }))

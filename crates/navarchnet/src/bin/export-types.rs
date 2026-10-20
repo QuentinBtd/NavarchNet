@@ -2,7 +2,7 @@ use navarchnet::{
     api::*,
     aws::{
         ingress_lookup::*, observation::*, route_lookup::*, routing::*, source_handoff::*,
-        vpc_lookup::*, *,
+        target_lookup::*, vpc_lookup::*, *,
     },
     domain::*,
 };
@@ -61,6 +61,12 @@ fn main() {
         SourceHandoffLookup,
         SourceHandoffResult,
         SourceHandoffReason,
+        TgwTargetRequest,
+        TgwTargetResponse,
+        TargetVpcLookup,
+        TargetSubnetLookup,
+        TgwTargetReason,
+        TargetAzSelection,
         SubnetRouteTable,
         RouteTableSelection,
         RouteSelectionReason,

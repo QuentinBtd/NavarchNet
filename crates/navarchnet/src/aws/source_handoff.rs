@@ -1,7 +1,8 @@
 //! Saved source-subnet/TGW ingress candidates, not a full path or contemporaneous cloud state.
 use super::{
+    attachment_subnets::{declared_subnets, standard_az_id},
     ingress_lookup::{self, TgwIngressReason, TgwIngressResult},
-    observation::{AwsResource, AwsTopology, ResourceKind},
+    observation::{AwsTopology, ResourceKind},
     route_lookup::TgwLookupResult,
     vpc_lookup::{self, VpcLookupResult, VpcRouteTarget, VpcSubnetLookupResult},
 };
@@ -131,61 +132,11 @@ pub fn lookup(
         if attachment.owner_account_id.as_deref() != Some(source.aws_account_id.as_str()) {
             return Err(UnverifiedAttachment);
         }
-        // Index once: repeated linear searches turn bounded large observations quadratic.
-        let mut subnets: std::collections::BTreeMap<&str, Vec<&AwsResource>> =
-            std::collections::BTreeMap::new();
-        for row in source
-            .resources
-            .iter()
-            .filter(|r| r.kind == ResourceKind::Subnet)
-        {
-            subnets.entry(&row.id).or_default().push(row);
-        }
-        let mut zones = std::collections::BTreeSet::new();
-        let mut matching = None;
-        for id in attachment
-            .related_ids
-            .iter()
-            .filter(|id| id.starts_with("subnet-"))
-        {
-            let rows = subnets
-                .get(id.as_str())
-                .filter(|rows| rows.len() == 1)
-                .ok_or(AttachmentSubnetUnresolved)?;
-            let row = rows[0];
-            let attachment_az = row
-                .az_id
-                .as_deref()
-                .filter(|id| standard_az_id(id))
-                .ok_or(AttachmentSubnetUnresolved)?;
-            if row.vpc_id.as_deref() != Some(vpc_id)
-                || row.owner_account_id.as_deref() != Some(source.aws_account_id.as_str())
-                || row.state.as_deref() != Some("available")
-                || !zones.insert(attachment_az)
-            {
-                return Err(AttachmentSubnetUnresolved);
-            }
-            let mut ipv4 = 0;
-            for cidr in &row.cidrs {
-                let network = cidr
-                    .parse::<ipnet::IpNet>()
-                    .map_err(|_| AttachmentSubnetUnresolved)?;
-                if network.addr() != network.network() {
-                    return Err(AttachmentSubnetUnresolved);
-                }
-                if network.addr().is_ipv4() {
-                    ipv4 += 1;
-                }
-            }
-            // AWS does not support IPv6-only attachment subnets; do not assume missing IPv4.
-            if ipv4 != 1 {
-                return Err(AttachmentSubnetUnresolved);
-            }
-            if attachment_az == az {
-                matching = Some(row);
-            }
-        }
-        let attachment_subnet = matching.ok_or(AttachmentSubnetUnresolved)?;
+        let (attachment_subnet, _) = declared_subnets(source, attachment)
+            .ok_or(AttachmentSubnetUnresolved)?
+            .into_iter()
+            .find(|(_, attachment_az)| *attachment_az == az)
+            .ok_or(AttachmentSubnetUnresolved)?;
         match ingress_lookup::lookup(network, &attachment.id, destination) {
             TgwIngressResult::Reported {
                 transit_gateway_id,
@@ -209,20 +160,6 @@ pub fn lookup(
         source: source_lookup,
         handoff,
     }
-}
-
-// Do not translate account-specific zone names or guess a Local Zone's parent AZ.
-fn standard_az_id(value: &str) -> bool {
-    let Some((prefix, number)) = value.split_once("-az") else {
-        return false;
-    };
-    value.len() <= 128
-        && !prefix.is_empty()
-        && !number.is_empty()
-        && prefix
-            .bytes()
-            .all(|b| b.is_ascii_lowercase() || b.is_ascii_digit())
-        && number.bytes().all(|b| b.is_ascii_digit())
 }
 
 #[cfg(test)]
@@ -415,6 +352,8 @@ mod tests {
             "euw1-az",
             "euw1-azx",
             "Euw1-az1",
+            "euw1-lon1-az1",
+            "euw1-wl1-lon-wlz1",
         ] {
             let (mut source, network) = fixture();
             source.resources[1].az_id = Some(az.into());
