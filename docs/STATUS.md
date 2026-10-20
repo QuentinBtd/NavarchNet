@@ -2,11 +2,19 @@
 
 NavarchNet has an implemented fake-provider journey and a locally exercised AWS read-only account/topology slice, not a completed AWS V1 orchestrator. No live AWS API call/resource mutation, release/tag publication, crates.io upload or GHCR upload has occurred.
 
-## Current saved-lookup operator journey (uncommitted)
+## Current continuation — saved TGW ingress association lookup (uncommitted)
 
-The route-content/per-table API checkpoint is independently reviewed and backed up as 5343491c428ddbdb4a37e3180d97194cc60b336f. New UI work lets an authenticated reader enter a destination IP in a saved TGW table card and query that existing offline API, even with SDK access disabled. Response snapshot/table/destination and disabled-execution/connectivity scope must match before display. Account/view generation and logout discard stale responses. Deferred HTTP fixtures exercise real main.ts/session/renderer integration, not cloud or browser data-plane acceptance. Fresh complete validation and independent review remain required before another push; prior approval does not cover this UI delta.
+The saved-lookup operator UI was independently reviewed on 814 unchanged source pins and backed up as a70b4cecd0b3d20c2aad00d032facb4408310222 on OPEN/DRAFT PR1. Actual installed fast pre-commit and full pre-push hooks passed; exact remote branch/PR head and manual-only workflow readbacks are retained. A separate new saved-lookup browser case is still not claimed.
+
+The new API continuation calculates a TGW table lookup from a saved VPC ingress attachment and its reported association, not propagation or a presumed default. It refuses incomplete/unknown scope, unready attachments/gateways/associations, contradictory ownership and incomplete association reads. The gateway must be observed in its owner's snapshot; a shared VPC attachment can have a different VPC owner. This only analyzes the TGW ingress/table leg and grants no management rights. It is not full source-subnet/AZ, target/NAT/return-path, policy or connectivity verification. Real HTTP/PostgreSQL and conservative scope fixtures have RED/GREEN logs. The installed full prek/mise gate passed 57 Rust tests (zero failed/ignored), 16 frontend, 3 existing core browser, 4 workflow and 6 binary-contract tests, real PostgreSQL/crash recovery, types/Clippy/build/contract and audits. Independent source review of this new delta remains pending; no new ingress browser case or live AWS acceptance is claimed.
+
+## Reviewed saved-lookup operator journey
+
+The route-content/per-table API checkpoint is independently reviewed and backed up as 5343491c428ddbdb4a37e3180d97194cc60b336f. The reviewed UI lets an authenticated reader enter a destination IP in a saved TGW table card and query that existing offline API, even with SDK access disabled. Response snapshot/table/destination and disabled-execution/connectivity scope must match before display. Account/view generation and logout discard stale responses. Deferred HTTP fixtures exercise real main.ts/session/renderer integration, not cloud or browser data-plane acceptance. Its full validation passed 53 Rust, 16 frontend, 3 existing browser, 4 workflow and 6 binary-contract tests with real PostgreSQL/crash recovery and audits. Approval applies only to that UI checkpoint, not subsequent ingress analysis.
 
 ## Reviewed TGW route-content and per-table lookup checkpoint
+
+Historical validation chronology below retains the original pending-review wording. Those review requests were subsequently completed for c8143cb and 5343491, and the operator UI for a70b4ce; none of those approvals covers the newer uncommitted ingress delta above.
 
 The reviewed R1/S1/read-only checkpoint is backed up on draft PR1 at c8143cbc0704c6120851c4b41bc72033f2f73b0b; its independent approval is scoped to that boundary. New local work captures typed static/propagated TGW routes, nested attachment/state/prefix-list/announcement metadata, explicit completion/continuation guards and separate route/attachment budgets. RED/GREEN protocol, STS policy, PostgreSQL legacy-row/limit and UI fixtures are retained. A pure offline per-table lookup and authenticated saved-snapshot lookup API add longest-prefix/static-priority analysis with explicit unknown/blackhole results. These do not resolve ingress association, prefix-list entries, BGP backups, SG/NACL, NAT/return routing or full egress/isolation. The actual full prek/mise gate passed 53 Rust tests (zero failed/ignored), 11 frontend, 3 browser, 4 workflow-policy and 6 binary-contract tests, real PostgreSQL/crash recovery and existing strict type/Clippy/build/contract/audit gates against the alternate target. Fresh review of this new work remains pending; no previous approval is reused.
 
@@ -48,7 +56,7 @@ First actual CI run: https://github.com/QuentinBtd/NavarchNet/actions/runs/39258
 
 ## Remaining acceptance scope
 
-- Fresh independent review of the new TGW route/lookup delta; complete effective-route analysis and remaining protocol boundaries. Live role onboarding/discovery/IAM evaluation and all cloud acceptance remain unexecuted; metadata consent does not grant route-management permission.
+- Fresh independent review of the new ingress-lookup delta; complete effective-route analysis and remaining protocol boundaries. Live role onboarding/discovery/IAM evaluation and all cloud acceptance remain unexecuted; metadata consent does not grant route-management permission.
 - Action-level TGW/RAM/zonal-NAT/forward-and-return routing execution, external-side-effect stale-worker/crash recovery and actual isolated multi-account egress acceptance.
 - Complete browser OIDC authorization-code/PKCE flow, automatic JWKS rotation, production database privilege separation, cursor pagination/retention and supported safe connection migration/deletion.
 - Maintainer-gated publication automation, versioned GHCR images, GitHub Releases and verified standard SBOM/provenance. Current AWS source has not been requalified as native x64/ARM64 archives or containers; historical successful packages are not evidence for this delta. Publication is explicitly unexecuted.

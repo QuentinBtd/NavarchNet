@@ -71,6 +71,19 @@ impl ReadOnlyAws for AwsFixture {
             let mut parent = AwsResource::new(ResourceKind::TransitGateway, "tgw-parent".into());
             parent.owner_account_id = Some(account.aws_account_id.clone());
             table.state = Some("available".into());
+            table.tgw_associations = Some(vec![TransitGatewayTableLink {
+                attachment_id: Some("tgw-attach-ingress".into()),
+                resource_id: Some(vpc.id.clone()),
+                resource_type: Some("vpc".into()),
+                state: Some("associated".into()),
+                route_table_announcement_id: None,
+            }]);
+            let mut ingress =
+                AwsResource::new(ResourceKind::VpcAttachment, "tgw-attach-ingress".into());
+            ingress.vpc_id = Some(vpc.id.clone());
+            ingress.state = Some("available".into());
+            ingress.related_ids.push(parent.id.clone());
+            parent.state = Some("available".into());
             table.tgw_routes = Some(vec![TransitGatewayRoute {
                 destination_cidr: Some("0.0.0.0/0".into()),
                 prefix_list_id: None,
@@ -91,7 +104,7 @@ impl ReadOnlyAws for AwsFixture {
                 started_at: "1".into(),
                 completed_at: "2".into(),
                 session_name: "navarchnet-http-fixture".into(),
-                resources: vec![vpc, foreign, table, parent],
+                resources: vec![vpc, foreign, table, parent, ingress],
                 request_ids: vec!["fixture".into()],
                 complete_for_supported_queries: true,
                 limitations: vec!["Fixture observations are not AWS connectivity evidence".into()],
@@ -320,6 +333,117 @@ async fn real_http_storage_journey_redacts_config_authorizes_writes_and_retains_
     assert!(store.plans().await?.is_empty());
     assert_eq!(fixture.verifications.load(Ordering::SeqCst), 1);
     assert_eq!(fixture.discoveries.load(Ordering::SeqCst), 2);
+    Ok(())
+}
+#[tokio::test]
+async fn saved_ingress_lookup_uses_reported_association_offline_without_writes()
+-> anyhow::Result<()> {
+    let (store, _) = support::isolated().await?;
+    let fixture = Arc::new(AwsFixture::default());
+    let admin = "a".repeat(32);
+    let reader = "r".repeat(32);
+    let app = api::router(AppState {
+        store: store.clone(),
+        auth: Arc::new(Auth::demo(admin.clone(), reader.clone())?),
+        aws: Some(fixture.clone()),
+    });
+    let (_, account) = request(
+        &app,
+        "POST",
+        "/aws/accounts",
+        Some(&admin),
+        Some(registration()),
+    )
+    .await?;
+    let id = account["id"].as_str().unwrap();
+    let (_, topology) = request(
+        &app,
+        "POST",
+        &format!("/aws/accounts/{id}/discover"),
+        Some(&admin),
+        Some(json!({})),
+    )
+    .await?;
+    let before = serde_json::to_value(store.aws_topology(id).await?.topology)?;
+    let offline = api::router(AppState {
+        store: store.clone(),
+        auth: Arc::new(Auth::demo(admin, reader.clone())?),
+        aws: None,
+    });
+    let path = format!(
+        "/aws/accounts/{id}/tgw-ingress-lookup?ingress_attachment_id=tgw-attach-ingress&destination=203.0.113.1"
+    );
+    assert_eq!(
+        request(&offline, "GET", &path, None, None).await?.0,
+        StatusCode::UNAUTHORIZED
+    );
+    let (status, result) = request(&offline, "GET", &path, Some(&reader), None).await?;
+    assert_eq!(status, StatusCode::OK);
+    assert_eq!(result["topology_id"], topology["id"]);
+    assert_eq!(result["ingress_attachment_id"], "tgw-attach-ingress");
+    assert_eq!(result["destination"], "203.0.113.1");
+    assert_eq!(result["result"]["status"], "reported");
+    assert_eq!(result["result"]["transit_gateway_id"], "tgw-parent");
+    assert_eq!(result["result"]["route_table_id"], "tgw-rtb-fixture");
+    assert_eq!(
+        result["result"]["lookup"]["attachment_ids"][0],
+        "tgw-attach-fixture"
+    );
+    assert_eq!(result["connectivity_tested"], false);
+    assert_eq!(result["execution_enabled"], false);
+    assert_eq!(
+        request(
+            &offline,
+            "GET",
+            &format!("{path}&unexpected=true"),
+            Some(&reader),
+            None
+        )
+        .await?
+        .0,
+        StatusCode::BAD_REQUEST
+    );
+    for (field, value) in [
+        ("ingress_attachment_id", "x".repeat(2049)),
+        ("destination", "x".repeat(65)),
+    ] {
+        let query = if field == "destination" {
+            format!("ingress_attachment_id=tgw-attach-ingress&destination={value}")
+        } else {
+            format!("ingress_attachment_id={value}&destination=203.0.113.1")
+        };
+        assert_eq!(
+            request(
+                &offline,
+                "GET",
+                &format!("/aws/accounts/{id}/tgw-ingress-lookup?{query}"),
+                Some(&reader),
+                None
+            )
+            .await?
+            .0,
+            StatusCode::CONFLICT
+        );
+    }
+    let invalid = path.replace("203.0.113.1", "not-an-ip");
+    let (status, invalid) = request(&offline, "GET", &invalid, Some(&reader), None).await?;
+    assert_eq!(status, StatusCode::OK);
+    assert_eq!(invalid["result"]["lookup"]["reason"], "invalid_destination");
+    let missing = path.replace("tgw-attach-ingress", "missing");
+    let (status, missing) = request(&offline, "GET", &missing, Some(&reader), None).await?;
+    assert_eq!(status, StatusCode::OK);
+    assert_eq!(
+        missing["result"]["reason"],
+        "missing_or_ambiguous_attachment"
+    );
+    assert_eq!(
+        before,
+        serde_json::to_value(store.aws_topology(id).await?.topology)?
+    );
+    assert_eq!(fixture.discoveries.load(Ordering::SeqCst), 1);
+    assert_eq!(fixture.verifications.load(Ordering::SeqCst), 1);
+    assert!(store.plans().await?.is_empty());
+    assert!(store.inventories().await?.is_empty());
     Ok(())
 }
 #[tokio::test]

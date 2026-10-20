@@ -1,5 +1,6 @@
 //! AWS role references and read-only observations. Never model discovery as ownership.
 pub mod ec2;
+pub mod ingress_lookup;
 pub mod observation;
 pub mod persistence;
 pub mod ram;

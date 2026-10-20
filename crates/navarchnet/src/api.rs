@@ -74,6 +74,21 @@ pub struct TgwLookupResponse {
     pub execution_enabled: bool,
     pub connectivity_tested: bool,
 }
+#[derive(Deserialize, TS)]
+#[serde(deny_unknown_fields)]
+pub struct TgwIngressRequest {
+    pub ingress_attachment_id: String,
+    pub destination: String,
+}
+#[derive(Serialize, TS)]
+pub struct TgwIngressResponse {
+    pub topology_id: String,
+    pub ingress_attachment_id: String,
+    pub destination: String,
+    pub result: aws::ingress_lookup::TgwIngressResult,
+    pub execution_enabled: bool,
+    pub connectivity_tested: bool,
+}
 impl From<anyhow::Error> for Failure {
     fn from(e: anyhow::Error) -> Self {
         Self(e)
@@ -105,6 +120,10 @@ pub fn router(state: AppState) -> Router {
         .route("/aws/accounts/{id}/discover", post(discover_aws))
         .route("/aws/accounts/{id}/topology", get(topology_aws))
         .route("/aws/accounts/{id}/tgw-route-lookup", get(lookup_aws_route))
+        .route(
+            "/aws/accounts/{id}/tgw-ingress-lookup",
+            get(lookup_aws_ingress),
+        )
         .route("/aws/accounts/{id}/adoptions", post(adopt_aws))
         .route("/networks", post(create_network))
         .route("/plans", post(create_plan))
@@ -196,6 +215,29 @@ async fn lookup_aws_route(
     Ok(Json(TgwLookupResponse {
         topology_id: view.topology.id,
         route_table_id: query.route_table_id,
+        destination: query.destination,
+        result,
+        execution_enabled: false,
+        connectivity_tested: false,
+    }))
+}
+async fn lookup_aws_ingress(
+    State(s): State<AppState>,
+    Path(id): Path<String>,
+    Query(query): Query<TgwIngressRequest>,
+) -> Result<Json<TgwIngressResponse>, Failure> {
+    if query.ingress_attachment_id.len() > 2048 || query.destination.len() > 64 {
+        return Err(anyhow::anyhow!("Ingress lookup input exceeds its bound").into());
+    }
+    let view = s.store.aws_topology(&id).await?;
+    let result = aws::ingress_lookup::lookup(
+        &view.topology,
+        &query.ingress_attachment_id,
+        &query.destination,
+    );
+    Ok(Json(TgwIngressResponse {
+        topology_id: view.topology.id,
+        ingress_attachment_id: query.ingress_attachment_id,
         destination: query.destination,
         result,
         execution_enabled: false,

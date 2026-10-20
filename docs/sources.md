@@ -37,6 +37,8 @@ GitHub action tag refs were resolved from their actual primary repositories with
 
 ## TGW route-content and offline lookup continuation — October 20, 2026
 
+Ingress continuation rechecked the official `how-transit-gateways-work.html` route-table association section, `API_GetTransitGatewayRouteTableAssociations.html`, `API_TransitGatewayRouteTableAssociation.html`, and `API_TransitGatewayVpcAttachment.html` on October 20, 2026. An attachment associates with one table but can propagate to several; the typed association includes optional attachment/resource/type/state fields. VPC attachments separately report their gateway, VPC, VPC owner and lifecycle state. The new offline ingress lookup requires unambiguous ready reported associations, supports different VPC/gateway owners without treating sharing as ownership, and refuses missing evidence rather than inventing defaults. These are source semantics and credential-free fixture checks, not executed AWS acceptance. Primary page captures are retained in the task's `persistent-migration/ingress-primary-sources.json`.
+
 | Primary source | Checked decision / boundary |
 | --- | --- |
 | https://docs.aws.amazon.com/AWSEC2/latest/APIReference/API_SearchTransitGatewayRoutes.html | Required type filter, bounded MaxResults, NextToken and explicit additionalRoutesAvailable response. The adapter checks both continuation and completion; it never treats a truncated or unknown response as complete. Local protocol fixtures, not live API acceptance. |

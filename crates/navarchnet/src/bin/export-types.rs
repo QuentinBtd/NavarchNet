@@ -1,6 +1,6 @@
 use navarchnet::{
     api::*,
-    aws::{observation::*, route_lookup::*, routing::*, *},
+    aws::{ingress_lookup::*, observation::*, route_lookup::*, routing::*, *},
     domain::*,
 };
 use ts_rs::{Config, TS};
@@ -43,6 +43,10 @@ fn main() {
         TgwLookupResponse,
         TgwLookupResult,
         TgwLookupReason,
+        TgwIngressRequest,
+        TgwIngressResponse,
+        TgwIngressResult,
+        TgwIngressReason,
         SubnetRouteTable,
         RouteTableSelection,
         RouteSelectionReason,
