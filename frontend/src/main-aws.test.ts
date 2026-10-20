@@ -297,6 +297,140 @@ function startLookup() {
   input.value = "203.0.113.1";
   form.dispatchEvent(new Event("submit", { cancelable: true }));
 }
+it("attachment point requests use A under a B candidate and outer generations fence ignored-abort success/error", async () => {
+  for (const retirement of ["switch", "ABA", "reload", "logout"])
+    for (const failed of [false, true]) {
+      const pending = deferred(),
+        paths: string[] = [];
+      const point: VpcLookupResponse = {
+        topology_id: "snapshot-account-a",
+        subnet_id: "subnet-attachment",
+        destination: "10.10.254.10",
+        execution_enabled: false,
+        connectivity_tested: false,
+        result: {
+          status: "reported",
+          route_table_id: "rtb-attachment",
+          source: "explicit_subnet",
+          lookup: {
+            status: "reported_route",
+            destination_cidr: "10.10.0.0/16",
+            origin: "CreateRouteTable",
+            target: { kind: "local" },
+          },
+        },
+      };
+      const source: TgwSourceResponse = {
+        source_topology_id: point.topology_id,
+        network_topology_id: "snapshot-account-b",
+        source_completed_at: "2",
+        network_completed_at: "4",
+        network_account_id: "account-b",
+        subnet_id: "subnet-account-a",
+        destination: "203.0.113.1",
+        execution_enabled: false,
+        connectivity_tested: false,
+        result: {
+          source: {
+            status: "reported",
+            route_table_id: "rtb-account-a",
+            source: "implicit_main",
+            lookup: {
+              status: "reported_route",
+              destination_cidr: "0.0.0.0/0",
+              origin: "CreateRoute",
+              target: { kind: "transit_gateway", id: "tgw-cross" },
+            },
+          },
+          handoff: {
+            status: "reported_candidate",
+            transit_gateway_id: "tgw-cross",
+            ingress_attachment_id: "ingress",
+            attachment_subnet_id: point.subnet_id,
+            az_id: "euw1-az1",
+            route_table_id: "tgw-table",
+            lookup: {
+              status: "reported_forward",
+              destination_cidr: "0.0.0.0/0",
+              route_type: "static",
+              attachment_ids: ["egress"],
+            },
+          },
+        },
+      };
+      await boot(async (path) => {
+        paths.push(path);
+        if (path.includes("vpc-route-lookup")) return pending.promise;
+        if (path.includes("tgw-source-lookup")) return response(source);
+        const view = vpcTopology(path.includes("account-a") ? "account-a" : "account-b");
+        view.subnet_route_tables.push({
+          subnet_id: point.subnet_id,
+          vpc_id: "vpc-account-a",
+          selection: { status: "selected", route_table_id: "rtb-attachment", source: "explicit_subnet" },
+        });
+        return response(view);
+      });
+      select("account-a");
+      await vi.waitFor(() => expect(document.querySelector("form[data-vpc-route-lookup]")).not.toBeNull());
+      const detail = [...document.querySelectorAll<HTMLDetailsElement>("#aws-topology details")].find(
+        (node) => node.querySelector("summary")?.textContent === "Inspect saved source-to-TGW candidate",
+      );
+      if (!detail) throw new Error("Missing source detail");
+      detail.open = true;
+      detail.dispatchEvent(new Event("toggle"));
+      const form = detail.querySelector("form"),
+        network = form?.querySelector("select"),
+        destination = form?.querySelector("input");
+      if (!form || !network || !destination) throw new Error("Missing controls");
+      network.value = "account-b";
+      destination.value = source.destination;
+      form.dispatchEvent(new Event("submit", { cancelable: true }));
+      await vi.waitFor(() =>
+        expect(form.querySelector("fieldset[data-source-attachment-entry]")).not.toBeNull(),
+      );
+      const child = form.querySelector("fieldset[data-source-attachment-entry]"),
+        input = child?.querySelector("input"),
+        action = child?.querySelector("button");
+      if (!child || !input || !action) throw new Error("Missing child");
+      expect(paths.filter((path) => path.includes("vpc-route-lookup"))).toHaveLength(0);
+      input.value = point.destination;
+      action.click();
+      expect(paths.filter((path) => path.includes("vpc-route-lookup"))).toEqual([
+        "/api/v1/aws/accounts/account-a/vpc-route-lookup?subnet_id=subnet-attachment&destination=10.10.254.10",
+      ]);
+      if (retirement === "logout") document.querySelector<HTMLButtonElement>("#logout")?.click();
+      else {
+        select(retirement === "reload" ? "account-a" : "account-b");
+        await vi.waitFor(() =>
+          expect(document.querySelector("#aws-topology")?.textContent).toContain(
+            retirement === "reload" ? "subnet-account-a" : "subnet-account-b",
+          ),
+        );
+        if (retirement === "ABA") {
+          select("account-a");
+          await vi.waitFor(() =>
+            expect(document.querySelector("#aws-topology")?.textContent).toContain("subnet-account-a"),
+          );
+        }
+      }
+      action.disabled = false;
+      action.click();
+      form.dispatchEvent(new Event("submit", { cancelable: true }));
+      expect(paths.filter((path) => path.includes("vpc-route-lookup"))).toHaveLength(1);
+      pending.resolve(
+        failed
+          ? new Response(JSON.stringify({ error: "obsolete point failure" }), { status: 500 })
+          : response(point),
+      );
+      await new Promise((done) => setTimeout(done, 0));
+      expect(document.querySelector("#aws-topology")?.textContent).not.toContain(
+        "Reported attachment-subnet entry",
+      );
+      expect(document.querySelector("#aws-topology")?.textContent).not.toContain("obsolete point failure");
+      vi.unstubAllGlobals();
+      document.body.replaceChildren();
+    }
+}, 15_000);
 function vpcTopology(id: string): TopologyView {
   const view = topology(id);
   const row = view.topology.resources[0];

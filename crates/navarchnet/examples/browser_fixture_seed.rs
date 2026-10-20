@@ -254,6 +254,35 @@ async fn main() -> anyhow::Result<()> {
             local.origin = Some("CreateRouteTable".into());
             routes.routes.push(local);
             resources.push(routes);
+            // Synthetic point diagnostics, not an observed return flow or whole-CIDR verdict.
+            let mut attachment_routes = AwsResource::new(
+                ResourceKind::RouteTable,
+                "rtb-browser-source-attachment".into(),
+            );
+            attachment_routes.owner_account_id = Some(account_id.into());
+            attachment_routes.vpc_id = Some("vpc-browser-source".into());
+            attachment_routes.associations.push(RouteAssociation {
+                id: Some("rtbassoc-browser-source-attachment".into()),
+                main: false,
+                subnet_id: Some("subnet-browser-attachment-1".into()),
+                gateway_id: None,
+                state: Some("associated".into()),
+            });
+            let mut local = route(
+                "10.10.0.0/16",
+                "active",
+                [("gatewayId".into(), "local".into())].into(),
+            );
+            local.origin = Some("CreateRouteTable".into());
+            attachment_routes.routes = vec![
+                local,
+                route(
+                    "10.10.1.0/24",
+                    "blackhole",
+                    [("natGatewayId".into(), "nat-browser-source-deleted".into())].into(),
+                ),
+            ];
+            resources.push(attachment_routes);
         } else {
             // Target-side metadata is synthetic and does not select a traffic AZ or prove NAT health.
             resources[3].cidrs = vec!["10.1.254.0/24".into()];

@@ -125,7 +125,23 @@ export function renderAwsTopology(
                   options.networkAccounts ?? [],
                   lookup,
                   options.onTargetLookup,
-                  { isCurrent: options.isCurrent, lookupNatReference: options.onNetworkNatReferenceLookup },
+                  {
+                    isCurrent: options.isCurrent,
+                    lookupNatReference: options.onNetworkNatReferenceLookup,
+                    sourceVpc: options.onVpcLookup
+                      ? {
+                          snapshot: {
+                            id: topology.id,
+                            account_id: topology.account_id,
+                            completed_at: topology.completed_at,
+                            execution_enabled: topology.execution_enabled,
+                            connectivity_tested: topology.connectivity_tested,
+                          },
+                          subnetRouteTables: view.subnet_route_tables,
+                          lookup: options.onVpcLookup,
+                        }
+                      : undefined,
+                  },
                 ),
               );
           };

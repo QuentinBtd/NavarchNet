@@ -1,5 +1,11 @@
 import { expect, it, vi } from "vitest";
-import type { RouteTableSelection, TgwSourceResponse, TgwTargetResponse } from "./generated";
+import type {
+  RouteTableSelection,
+  TgwSourceResponse,
+  TgwTargetResponse,
+  VpcLookupRequest,
+  VpcLookupResponse,
+} from "./generated";
 import { renderSourceHandoff, type SavedNetworkTargetLookup } from "./source-handoff-view";
 
 // Renderer-only malformed/deferred HTTP fixtures, not backend/AWS acceptance.
@@ -80,6 +86,232 @@ async function finished(form: HTMLFormElement) {
   ).toBe(true);
   return status(form);
 }
+function attachmentContext(
+  lookup = async (query: VpcLookupRequest): Promise<VpcLookupResponse | undefined> => ({
+    ...query,
+    topology_id: "source-snapshot",
+    execution_enabled: false,
+    connectivity_tested: false,
+    result: {
+      status: "reported",
+      route_table_id: "rtb-source-attachment",
+      source: "explicit_subnet",
+      lookup: {
+        status: "reported_route",
+        destination_cidr: "10.10.0.0/16",
+        origin: "CreateRouteTable",
+        target: { kind: "local" },
+      },
+    },
+  }),
+) {
+  return {
+    snapshot: {
+      id: "source-snapshot",
+      account_id: "source-account",
+      completed_at: "2",
+      execution_enabled: false,
+      connectivity_tested: false,
+    },
+    subnetRouteTables: [
+      { subnet_id: "subnet-source", vpc_id: "vpc-source", selection: { ...selection } },
+      {
+        subnet_id: "subnet-attachment",
+        vpc_id: "vpc-source",
+        selection: {
+          status: "selected",
+          route_table_id: "rtb-source-attachment",
+          source: "explicit_subnet",
+        } as RouteTableSelection,
+      },
+    ],
+    lookup,
+  };
+}
+it("explicitly inspects the source attachment subnet toward a separately supplied IP without reusing the outbound destination", async () => {
+  const context = attachmentContext(),
+    lookup = vi.fn(context.lookup);
+  const form = renderSourceHandoff(
+    "source-snapshot",
+    "subnet-source",
+    selection,
+    0,
+    [{ id: "network", name: "Network", region: "eu-west-1" }],
+    async () => structuredClone(value),
+    undefined,
+    { sourceVpc: { ...context, lookup } },
+  );
+  const network = form.querySelector("select"),
+    destination = form.querySelector("input");
+  if (!network || !destination) throw new Error("Missing source controls");
+  network.value = "network";
+  destination.value = value.destination;
+  submit(form);
+  await finished(form);
+  const children = form.querySelectorAll<HTMLFieldSetElement>("fieldset[data-source-attachment-entry]");
+  expect(children).toHaveLength(1);
+  const child = children[0];
+  if (!child) throw new Error("Missing attachment diagnostic");
+  const input = child.querySelector("input"),
+    button = child.querySelector("button");
+  if (!input || !button) throw new Error("Missing point lookup controls");
+  expect(input.value).toBe("");
+  expect(input.required).toBe(false);
+  expect(form.checkValidity()).toBe(true);
+  expect(lookup).not.toHaveBeenCalled();
+  button.click();
+  expect(lookup).not.toHaveBeenCalled();
+  input.value = "10.10.254.10";
+  button.click();
+  await expect.poll(() => child.textContent).toContain("Reported attachment-subnet entry");
+  expect(lookup).toHaveBeenCalledExactlyOnceWith({
+    subnet_id: "subnet-attachment",
+    destination: "10.10.254.10",
+  });
+  for (const literal of [
+    "rtb-source-attachment",
+    "explicit_subnet",
+    "source-account",
+    "completed 2",
+    "203.0.113.1",
+    "10.10.254.10",
+    "operator-supplied",
+    "not a validated return path",
+  ])
+    expect(child.textContent).toContain(literal);
+  expect(child.querySelector("form")).toBeNull();
+  expect(child.querySelector("fieldset[data-nat-reference]")).toBeNull();
+});
+async function attachmentForm(ctx = attachmentContext(), reply = structuredClone(value)) {
+  const form = renderSourceHandoff(
+    "source-snapshot",
+    "subnet-source",
+    selection,
+    0,
+    [
+      { id: "network", name: "Network", region: "eu-west-1" },
+      { id: "other", name: "Other", region: "eu-west-1" },
+    ],
+    async () => structuredClone(reply),
+    async () => targetNatFixture(),
+    { sourceVpc: ctx },
+  );
+  const network = form.querySelector("select"),
+    input = form.querySelector("input");
+  if (!network || !input) throw new Error("Missing controls");
+  network.value = "network";
+  input.value = value.destination;
+  submit(form);
+  await finished(form);
+  return { form, network, input };
+}
+it("unavailable source snapshot/table provenance disables only this child, not the accepted candidate/target branch", async () => {
+  for (const fault of [
+    "snapshot",
+    "time",
+    "account",
+    "execution",
+    "connectivity",
+    "missing-row",
+    "duplicate-candidate",
+    "duplicate-source",
+    "wrong-vpc",
+    "selection",
+    "source-selection",
+  ]) {
+    const ctx = attachmentContext();
+    if (fault === "snapshot") ctx.snapshot.id = "other-snapshot";
+    if (fault === "time") ctx.snapshot.completed_at = "3";
+    if (fault === "account") ctx.snapshot.account_id = "";
+    if (fault === "execution") Reflect.deleteProperty(ctx.snapshot, "execution_enabled");
+    if (fault === "connectivity") ctx.snapshot.connectivity_tested = null as unknown as boolean;
+    const candidate = ctx.subnetRouteTables[1],
+      source = ctx.subnetRouteTables[0];
+    if (!candidate || !source) throw new Error("Missing row");
+    if (fault === "missing-row") ctx.subnetRouteTables.pop();
+    if (fault === "duplicate-candidate") ctx.subnetRouteTables.push(structuredClone(candidate));
+    if (fault === "duplicate-source") ctx.subnetRouteTables.push(structuredClone(source));
+    if (fault === "wrong-vpc") candidate.vpc_id = "different";
+    if (fault === "selection") Reflect.set(candidate.selection, "status", "future");
+    if (fault === "source-selection" && source.selection.status === "selected")
+      source.selection.route_table_id = "other";
+    const { form } = await attachmentForm(ctx);
+    expect(status(form)).toContain("Reported ingress candidate");
+    expect(form.querySelector("fieldset[data-source-attachment-entry]")).toBeNull();
+    expect(form.textContent).toContain("inspection unavailable");
+    expect(form.querySelector("fieldset[data-target-entries]")).not.toBeNull();
+  }
+});
+it("permits hypothetical inspection for a candidate with TGW blackhole, but never for an unresolved handoff", async () => {
+  const reply = structuredClone(value);
+  if (reply.result.handoff.status !== "reported_candidate") throw new Error("Missing candidate");
+  reply.result.handoff.lookup = { status: "reported_blackhole", destination_cidr: "10.0.0.0/8" };
+  const { form } = await attachmentForm(attachmentContext(), reply);
+  expect(form.querySelector("fieldset[data-source-attachment-entry]")).not.toBeNull();
+  expect(form.querySelector("fieldset[data-target-entries]")).toBeNull();
+  const unresolved = structuredClone(value);
+  unresolved.result.handoff = { status: "ingress_unresolved", reason: "missing_or_ambiguous_attachment" };
+  expect(
+    (await attachmentForm(attachmentContext(), unresolved)).form.querySelector(
+      "fieldset[data-source-attachment-entry]",
+    ),
+  ).toBeNull();
+});
+it("source resubmit, change-only and network ABA remove a pending child and fence its retained success/error/action", async () => {
+  for (const retirement of ["resubmit", "change", "network ABA"])
+    for (const failed of [false, true]) {
+      let resolve: (value: VpcLookupResponse | undefined) => void = () => {
+        throw new Error("Missing resolver");
+      };
+      let reject: (error: Error) => void = () => {
+        throw new Error("Missing rejecter");
+      };
+      const pending = new Promise<VpcLookupResponse | undefined>((yes, no) => {
+        resolve = yes;
+        reject = no;
+      });
+      const lookup = vi.fn(async () => pending);
+      const { form, network, input } = await attachmentForm(attachmentContext(lookup));
+      const child = form.querySelector("fieldset[data-source-attachment-entry]"),
+        point = child?.querySelector("input"),
+        action = child?.querySelector("button");
+      if (!child || !point || !action) throw new Error("Missing child");
+      point.value = "10.10.254.10";
+      action.click();
+      expect(point.disabled).toBe(true);
+      expect(form.querySelector<HTMLButtonElement>('button[type="submit"]')?.disabled).toBe(false);
+      expect(form.querySelector<HTMLSelectElement>("fieldset[data-target-entries] select")?.disabled).toBe(
+        false,
+      );
+      if (retirement === "resubmit") submit(form);
+      else if (retirement === "change") {
+        input.value = "203.0.113.2";
+        input.dispatchEvent(new Event("change"));
+      } else {
+        network.value = "other";
+        network.dispatchEvent(new Event("input"));
+        network.value = "network";
+        network.dispatchEvent(new Event("change"));
+      }
+      expect(child.textContent).toBe("");
+      if (failed) reject(new Error("obsolete attachment failure"));
+      else
+        resolve(
+          await attachmentContext().lookup({ subnet_id: "subnet-attachment", destination: point.value }),
+        );
+      await new Promise((done) => setTimeout(done, 0));
+      action.disabled = false;
+      action.click();
+      expect(lookup).toHaveBeenCalledTimes(1);
+      expect(form.textContent).not.toContain("Reported attachment-subnet entry");
+      expect(form.textContent).not.toContain("obsolete attachment failure");
+      if (retirement === "resubmit") {
+        const replacement = form.querySelector("fieldset[data-source-attachment-entry]");
+        expect(replacement).not.toBe(child);
+        expect(replacement?.querySelector("input")?.value).toBe("");
+      }
+    }
+});
 it("shows both independent snapshots and inert candidate metadata without a validated-path claim", async () => {
   const form = render();
   submit(form);

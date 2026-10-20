@@ -928,9 +928,46 @@ async fn saved_source_handoff_binds_two_account_snapshots_and_az_without_writes(
         execution_enabled: false,
         connectivity_tested: false,
     };
+    let mut attachment_table = owned(
+        ResourceKind::RouteTable,
+        "rtb-source-attachment",
+        "123456789012",
+    );
+    attachment_table.vpc_id = Some(vpc.id.clone());
+    attachment_table.associations.push(RouteAssociation {
+        id: Some("rtbassoc-source-attachment".into()),
+        main: false,
+        subnet_id: Some(attachment_subnet.id.clone()),
+        gateway_id: None,
+        state: Some("associated".into()),
+    });
+    attachment_table.routes = vec![
+        ObservedRoute {
+            ipv4_destination: Some("10.1.0.0/16".into()),
+            ipv6_destination: None,
+            prefix_list_destination: None,
+            state: Some("active".into()),
+            origin: Some("CreateRouteTable".into()),
+            targets: [("gatewayId".into(), "local".into())].into(),
+        },
+        ObservedRoute {
+            ipv4_destination: Some("10.1.1.0/24".into()),
+            ipv6_destination: None,
+            prefix_list_destination: None,
+            state: Some("blackhole".into()),
+            origin: Some("CreateRoute".into()),
+            targets: [("natGatewayId".into(), "nat-deleted".into())].into(),
+        },
+    ];
     let source = snapshot(
         &source_account,
-        vec![vpc, source_subnet, attachment_subnet, source_table],
+        vec![
+            vpc,
+            source_subnet,
+            attachment_subnet,
+            source_table,
+            attachment_table,
+        ],
         "3",
     );
     let network = snapshot(
@@ -981,6 +1018,28 @@ async fn saved_source_handoff_binds_two_account_snapshots_and_az_without_writes(
     assert_eq!(handoff["az_id"], "euw1-az1");
     assert_eq!(handoff["route_table_id"], "tgw-rtb-network");
     assert_eq!(handoff["lookup"]["status"], "reported_forward");
+    // Existing SDK-off APIs compose a hypothetical point check, not a proven return route.
+    for (destination, status, cidr) in [
+        ("10.1.254.10", "reported_route", "10.1.0.0/16"),
+        ("10.1.1.10", "reported_blackhole", "10.1.1.0/24"),
+    ] {
+        let child_path = format!(
+            "/aws/accounts/{}/vpc-route-lookup?subnet_id=subnet-attachment&destination={destination}",
+            source_account.id
+        );
+        let (code, child) = request(&app, "GET", &child_path, Some(&reader), None).await?;
+        assert_eq!(code, StatusCode::OK);
+        assert_eq!(child["topology_id"], source.id);
+        assert_eq!(child["subnet_id"], handoff["attachment_subnet_id"]);
+        assert_eq!(child["destination"], destination);
+        assert_eq!(child["result"]["route_table_id"], "rtb-source-attachment");
+        assert_eq!(child["result"]["source"], "explicit_subnet");
+        assert_eq!(child["result"]["lookup"]["status"], status);
+        assert_eq!(child["result"]["lookup"]["destination_cidr"], cidr);
+        assert_eq!(child["execution_enabled"], false);
+        assert_eq!(child["connectivity_tested"], false);
+        assert!(child.get("completed_at").is_none() && child.get("account_id").is_none());
+    }
     assert_eq!(result["execution_enabled"], false);
     assert_eq!(result["connectivity_tested"], false);
     assert_eq!(
@@ -1036,6 +1095,42 @@ async fn saved_source_handoff_binds_two_account_snapshots_and_az_without_writes(
     assert_eq!(audit_before, audit_after);
     assert!(store.plans().await?.is_empty());
     assert!(store.inventories().await?.is_empty());
+    // An independently completed generation changes latest GET identity; consumers must refresh.
+    let refreshed = snapshot(&source_account, source.resources.clone(), "8");
+    let (_, _, generation) = store
+        .begin_aws_discovery("fixture", &source_account.id)
+        .await?;
+    store
+        .finish_aws_discovery("fixture", generation, &refreshed)
+        .await?;
+    let refreshed_before = serde_json::to_value(store.aws_topology(&source_account.id).await?)?;
+    let audit_refreshed: i64 = sqlx::query_scalar("SELECT count(*) FROM audit")
+        .fetch_one(&store.pool)
+        .await?;
+    let (code, child) = request(
+        &app,
+        "GET",
+        &format!(
+            "/aws/accounts/{}/vpc-route-lookup?subnet_id=subnet-attachment&destination=10.1.254.10",
+            source_account.id
+        ),
+        Some(&reader),
+        None,
+    )
+    .await?;
+    assert_eq!(code, StatusCode::OK);
+    assert_eq!(child["topology_id"], refreshed.id);
+    assert_ne!(child["topology_id"], result["source_topology_id"]);
+    assert_eq!(
+        refreshed_before,
+        serde_json::to_value(store.aws_topology(&source_account.id).await?)?
+    );
+    assert_eq!(
+        audit_refreshed,
+        sqlx::query_scalar::<_, i64>("SELECT count(*) FROM audit")
+            .fetch_one(&store.pool)
+            .await?
+    );
     Ok(())
 }
 #[tokio::test]

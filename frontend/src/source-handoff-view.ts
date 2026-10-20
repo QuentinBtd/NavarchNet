@@ -11,6 +11,7 @@ import type {
   VpcSubnetLookupResult,
 } from "./generated";
 import type { NatReferenceParent } from "./nat-reference-view";
+import { renderSourceAttachmentEntry, type SourceVpcContext } from "./source-attachment-entry-view";
 import { renderTargetEntries } from "./target-entries-view";
 import { text } from "./view";
 
@@ -88,11 +89,24 @@ export function renderSourceHandoff(
     Partial<Pick<VerifiedAccount, "aws_account_id">>)[],
   lookup: SavedSourceHandoff,
   lookupTarget?: SavedNetworkTargetLookup,
-  options: { isCurrent?: () => boolean; lookupNatReference?: SavedNetworkNatReferenceLookup } = {},
+  options: {
+    isCurrent?: () => boolean;
+    lookupNatReference?: SavedNetworkNatReferenceLookup;
+    sourceVpc?: SourceVpcContext;
+  } = {},
 ): HTMLFormElement {
   accounts = accounts.map((account) => ({ ...account }));
   const upstreamCurrent = options.isCurrent ?? (() => true);
   const lookupNat = options.lookupNatReference;
+  const sourceVpc = options.sourceVpc
+    ? {
+        snapshot: { ...options.sourceVpc.snapshot },
+        lookup: options.sourceVpc.lookup,
+        subnetRouteTables: Array.isArray(options.sourceVpc.subnetRouteTables)
+          ? options.sourceVpc.subnetRouteTables.map((row) => ({ ...row, selection: { ...row?.selection } }))
+          : [],
+      }
+    : undefined;
   const form = document.createElement("form");
   form.dataset.sourceHandoff = subnetId;
   const networkLabel = text("label", "Network account / region (saved observation)");
@@ -123,7 +137,11 @@ export function renderSourceHandoff(
   form.append(networkLabel, network, label, input, submit, output);
   let generation = 0;
   let target: HTMLFieldSetElement | undefined;
+  let attachment: HTMLElement | undefined;
   const retireTarget = () => {
+    attachment?.remove();
+    attachment?.replaceChildren();
+    attachment = undefined;
     for (const child of target?.querySelectorAll("fieldset[data-nat-reference]") ?? [])
       child.replaceChildren();
     target?.remove();
@@ -249,6 +267,29 @@ export function renderSourceHandoff(
               ),
             );
           form.append(target);
+        }
+        if (sourceVpc && handoff.status === "reported_candidate") {
+          try {
+            attachment = renderSourceAttachmentEntry(
+              sourceVpc,
+              {
+                topologyId,
+                completedAt: value.source_completed_at,
+                sourceSubnetId: subnetId,
+                outboundDestination: query.destination,
+                attachmentSubnetId: handoff.attachment_subnet_id,
+                sourceSelection: selection,
+              },
+              index,
+              current,
+            );
+          } catch {
+            attachment = text(
+              "p",
+              "Source attachment-subnet inspection unavailable: refresh the saved source snapshot and uniquely bound subnet-table context. Existing candidate/target evidence is unchanged.",
+            );
+          }
+          form.append(attachment);
         }
       } catch (error) {
         if (current())
