@@ -35,6 +35,14 @@ Official Docker Hub API tag records were read before pinning multi-architecture 
 
 GitHub action tag refs were resolved from their actual primary repositories with `git ls-remote` before copying full SHAs into CI: checkout v6, setup-node v6, rust-cache v2 and upload-artifact v4. No mutable action tag is used in the workflow.
 
+## TGW route-content and offline lookup continuation — October 20, 2026
+
+| Primary source | Checked decision / boundary |
+| --- | --- |
+| https://docs.aws.amazon.com/AWSEC2/latest/APIReference/API_SearchTransitGatewayRoutes.html | Required type filter, bounded MaxResults, NextToken and explicit additionalRoutesAvailable response. The adapter checks both continuation and completion; it never treats a truncated or unknown response as complete. Local protocol fixtures, not live API acceptance. |
+| https://docs.aws.amazon.com/AWSEC2/latest/APIReference/API_TransitGatewayRoute.html and pinned aws-sdk-ec2 1.268.0 protocol_serde/shape_transit_gateway_route.rs | Preserve destination/prefix-list/state/type/announcement and nested attachment fields. Validate CIDRs and budgets without translating unknown states into readiness. SDK source was inspected, not compiled as a successful full EC2 probe. |
+| https://docs.aws.amazon.com/vpc/latest/tgw/how-transit-gateways-work.html | Longest prefix first; static takes precedence over propagated for the same CIDR. A conservative per-table saved-observation lookup refuses unresolved prefix lists and competing/unknown evidence rather than inventing BGP, attachment readiness, hidden backup selection, full routing or measured reachability. |
+
 ## Local-first and AWS read-only continuation — October 19, 2026
 
 | Primary source | Checked decision / boundary |

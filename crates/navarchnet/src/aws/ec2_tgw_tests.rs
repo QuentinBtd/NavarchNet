@@ -33,8 +33,10 @@ async fn handler(
     let action = fields["Action"].as_str();
     let content = if action == "DescribeTransitGatewayRouteTables" {
         format!(
-            "<transitGatewayRouteTables><item><transitGatewayRouteTableId>{TABLE}</transitGatewayRouteTableId><ownerId>123456789012</ownerId></item></transitGatewayRouteTables>"
+            "<transitGatewayRouteTables><item><transitGatewayRouteTableId>{TABLE}</transitGatewayRouteTableId><transitGatewayId>tgw-parent</transitGatewayId><state>available</state></item></transitGatewayRouteTables>"
         )
+    } else if action == "DescribeTransitGateways" {
+        "<transitGatewaySet><item><transitGatewayId>tgw-parent</transitGatewayId><ownerId>123456789012</ownerId><state>available</state></item></transitGatewaySet>".into()
     } else if action == "GetTransitGatewayRouteTableAssociations" {
         assert_eq!(
             fields.get("TransitGatewayRouteTableId").map(String::as_str),
@@ -65,6 +67,29 @@ async fn handler(
             return (StatusCode::FORBIDDEN,"<Response><Errors><Error><Code>UnauthorizedOperation</Code><Message>do-not-echo-fixture-message</Message></Error></Errors></Response>".into());
         }
         "<transitGatewayRouteTablePropagations><item><transitGatewayAttachmentId>tgw-attach-a</transitGatewayAttachmentId><resourceId>vpc-a</resourceId><resourceType>vpc</resourceType><state>enabled</state></item><item><transitGatewayRouteTableAnnouncementId>tgw-rtb-announcement-a</transitGatewayRouteTableAnnouncementId><resourceType>future-type</resourceType><state>enabling</state></item></transitGatewayRouteTablePropagations>".into()
+    } else if action == "SearchTransitGatewayRoutes" {
+        assert_eq!(fields["TransitGatewayRouteTableId"], TABLE);
+        assert_eq!(fields["MaxResults"], "1000");
+        assert_eq!(fields["Filter.1.Name"], "type");
+        assert_eq!(fields["Filter.1.Value.1"], "static");
+        assert_eq!(fields["Filter.1.Value.2"], "propagated");
+        match f.mode {
+            5 => "<routeSet/><additionalRoutesAvailable>true</additionalRoutesAvailable>".into(),
+            6 => "<routeSet/>".into(),
+            7 => "<routeSet/><additionalRoutesAvailable>unknown</additionalRoutesAvailable>".into(),
+            8 => "<additionalRoutesAvailable>false</additionalRoutesAvailable>".into(),
+            9 => "<routeSet/><additionalRoutesAvailable>true</additionalRoutesAvailable><nextToken>cycle</nextToken>".into(),
+            11 => "<routeSet><item><destinationCidrBlock>not-a-cidr</destinationCidrBlock></item></routeSet><additionalRoutesAvailable>false</additionalRoutesAvailable>".into(),
+            12 => "<routeSet/><additionalRoutesAvailable>false</additionalRoutesAvailable>".into(),
+            13 => "<routeSet/><additionalRoutesAvailable>false</additionalRoutesAvailable><nextToken>contradiction</nextToken>".into(),
+            _ if fields.contains_key("NextToken") => {
+                assert_eq!(fields["NextToken"], "route+/=");
+                let cidr = if f.mode == 10 { "0.0.0.0/0" } else { "::/0" };
+                let kind = if f.mode == 10 { "static" } else { "propagated" };
+                format!("<routeSet><item><destinationCidrBlock>{cidr}</destinationCidrBlock><type>{kind}</type><state>active</state><transitGatewayAttachments><item><transitGatewayAttachmentId>tgw-attach-b</transitGatewayAttachmentId><resourceId>vpc-b</resourceId><resourceType>future-type</resourceType></item></transitGatewayAttachments></item><item><prefixListId>pl-fixture</prefixListId><type>static</type><state>pending</state><transitGatewayRouteTableAnnouncementId>announcement-fixture</transitGatewayRouteTableAnnouncementId></item></routeSet><additionalRoutesAvailable>false</additionalRoutesAvailable>")
+            }
+            _ => "<routeSet><item><destinationCidrBlock>0.0.0.0/0</destinationCidrBlock><type>static</type><state>active</state><transitGatewayAttachments><item><transitGatewayAttachmentId>tgw-attach-a</transitGatewayAttachmentId><resourceId>vpc-a</resourceId><resourceType>vpc</resourceType></item></transitGatewayAttachments></item><item><destinationCidrBlock>10.0.0.0/8</destinationCidrBlock><type>static</type><state>blackhole</state></item></routeSet><additionalRoutesAvailable>true</additionalRoutesAvailable><nextToken>route+/=</nextToken>".into(),
+        }
     } else {
         let set = QUERIES.iter().find(|q| q.0 == action).unwrap().1;
         format!("<{set}/>")
@@ -133,7 +158,7 @@ async fn discovers_scoped_paginated_tgw_associations_and_propagations_without_ow
         Some("tgw-rtb-announcement-a")
     );
     assert!(!table.managed);
-    assert_eq!(ids.len(), QUERIES.len() + 3);
+    assert_eq!(ids.len(), QUERIES.len() + 5);
     let requests = requests.lock().unwrap();
     let pages: Vec<_> = requests
         .iter()
@@ -159,4 +184,62 @@ async fn scoped_tgw_failures_cycles_missing_collections_and_duplicate_links_abor
 fn legacy_tgw_rows_distinguish_unqueried_from_a_completed_empty_read() {
     let old:AwsResource=serde_json::from_value(serde_json::json!({"kind":"transit_gateway_route_table","id":TABLE,"owner_account_id":null,"vpc_id":null,"subnet_id":null,"az_id":null,"state":null,"cidrs":[],"public_ips":[],"private_ips":[],"tags":{},"routes":[],"associations":[],"related_ids":[],"connectivity_type":null,"availability_mode":null,"managed":false})).unwrap();
     assert!(old.tgw_associations.is_none() && old.tgw_propagations.is_none());
+    assert!(old.tgw_routes.is_none());
+}
+
+#[tokio::test]
+async fn captures_tgw_route_contents_and_follows_continuation_without_inventing_forwarding() {
+    let (result, _) = run(0).await;
+    let (rows, _) = result.unwrap();
+    let table = rows
+        .iter()
+        .find(|r| r.kind == ResourceKind::TransitGatewayRouteTable)
+        .unwrap();
+    let routes = table
+        .tgw_routes
+        .as_ref()
+        .expect("Route contents not queried");
+    assert_eq!(routes.len(), 4);
+    assert_eq!(routes[0].destination_cidr.as_deref(), Some("0.0.0.0/0"));
+    assert_eq!(
+        routes[0].attachments[0].attachment_id.as_deref(),
+        Some("tgw-attach-a")
+    );
+    assert_eq!(routes[1].state.as_deref(), Some("blackhole"));
+    assert!(routes[1].attachments.is_empty());
+    assert_eq!(routes[2].destination_cidr.as_deref(), Some("::/0"));
+    assert_eq!(
+        routes[2].attachments[0].resource_type.as_deref(),
+        Some("future-type")
+    );
+    assert_eq!(routes[3].prefix_list_id.as_deref(), Some("pl-fixture"));
+    assert_eq!(
+        routes[3].route_table_announcement_id.as_deref(),
+        Some("announcement-fixture")
+    );
+    assert_eq!(routes[3].state.as_deref(), Some("pending"));
+    assert!(!table.managed);
+    let (empty, _) = run(12).await;
+    assert!(
+        empty
+            .unwrap()
+            .0
+            .iter()
+            .find(|r| r.kind == ResourceKind::TransitGatewayRouteTable)
+            .unwrap()
+            .tgw_routes
+            .as_ref()
+            .unwrap()
+            .is_empty()
+    );
+}
+
+#[tokio::test]
+async fn rejects_truncated_unknown_contradictory_cyclic_and_duplicate_tgw_route_searches() {
+    for mode in [5, 6, 7, 8, 9, 10, 11, 13] {
+        assert!(
+            run(mode).await.0.is_err(),
+            "Incomplete route search mode{mode} published as complete"
+        );
+    }
 }

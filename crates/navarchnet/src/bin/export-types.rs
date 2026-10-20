@@ -1,6 +1,6 @@
 use navarchnet::{
     api::*,
-    aws::{observation::*, routing::*, *},
+    aws::{observation::*, route_lookup::*, routing::*, *},
     domain::*,
 };
 use ts_rs::{Config, TS};
@@ -37,6 +37,12 @@ fn main() {
         ObservedRoute,
         RouteAssociation,
         TransitGatewayTableLink,
+        TransitGatewayRoute,
+        TransitGatewayRouteAttachment,
+        TgwLookupRequest,
+        TgwLookupResponse,
+        TgwLookupResult,
+        TgwLookupReason,
         SubnetRouteTable,
         RouteTableSelection,
         RouteSelectionReason,

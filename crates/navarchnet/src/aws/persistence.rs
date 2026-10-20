@@ -112,6 +112,20 @@ impl Store {
             links <= 10_000,
             "AWS topology exceeds the TGW relationship budget"
         );
+        let mut routes = 0usize;
+        let mut attachments = 0usize;
+        for row in &topology.resources {
+            if let Some(values) = &row.tgw_routes {
+                routes = routes.saturating_add(values.len());
+                for route in values {
+                    attachments = attachments.saturating_add(route.attachments.len());
+                }
+            }
+        }
+        ensure!(
+            routes <= 10_000 && attachments <= 10_000,
+            "AWS topology exceeds TGW route or attachment budget"
+        );
         let mut tx = self.pool.begin().await?;
         let row = sqlx::query(
             "SELECT public_view,discovery_fence FROM aws_accounts WHERE id=$1 FOR UPDATE",

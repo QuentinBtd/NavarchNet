@@ -11,11 +11,11 @@ Evaluated October 19, 2026. No Floci test is added to automatic CI or the ordina
 
 ## Source dispatch coverage, not executed operations
 
-The pinned dispatchers expose handlers for all 17 distinct current NavarchNet operations (the initial 15-operation inventory is preserved separately; two scoped TGW reads were subsequently added):
+The pinned dispatchers expose handlers for all 18 distinct current NavarchNet operations (earlier 15/17-operation inventories are preserved separately; scoped TGW relationship reads and route search were subsequently added):
 
 | Service | Current operations found |
 | --- | --- |
-| EC2 | DescribeVpcs, DescribeSubnets, DescribeRouteTables, DescribeTransitGateways, DescribeTransitGatewayVpcAttachments, DescribeNatGateways, DescribeInternetGateways, DescribeAddresses, DescribeTransitGatewayRouteTables, GetTransitGatewayRouteTableAssociations, GetTransitGatewayRouteTablePropagations |
+| EC2 | DescribeVpcs, DescribeSubnets, DescribeRouteTables, DescribeTransitGateways, DescribeTransitGatewayVpcAttachments, DescribeNatGateways, DescribeInternetGateways, DescribeAddresses, DescribeTransitGatewayRouteTables, GetTransitGatewayRouteTableAssociations, GetTransitGatewayRouteTablePropagations, SearchTransitGatewayRoutes |
 | STS | AssumeRole, GetCallerIdentity |
 | RAM | GetResourceShares, GetResourceShareInvitations, ListResources, ListPrincipals |
 

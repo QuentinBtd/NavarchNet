@@ -46,6 +46,21 @@ pub struct TransitGatewayTableLink {
     pub route_table_announcement_id: Option<String>,
 }
 #[derive(Debug, Clone, Serialize, Deserialize, TS)]
+pub struct TransitGatewayRouteAttachment {
+    pub attachment_id: Option<String>,
+    pub resource_id: Option<String>,
+    pub resource_type: Option<String>,
+}
+#[derive(Debug, Clone, Serialize, Deserialize, TS)]
+pub struct TransitGatewayRoute {
+    pub destination_cidr: Option<String>,
+    pub prefix_list_id: Option<String>,
+    pub state: Option<String>,
+    pub route_type: Option<String>,
+    pub route_table_announcement_id: Option<String>,
+    pub attachments: Vec<TransitGatewayRouteAttachment>,
+}
+#[derive(Debug, Clone, Serialize, Deserialize, TS)]
 pub struct AwsResource {
     pub kind: ResourceKind,
     pub id: String,
@@ -65,6 +80,8 @@ pub struct AwsResource {
     pub tgw_associations: Option<Vec<TransitGatewayTableLink>>,
     #[serde(default)]
     pub tgw_propagations: Option<Vec<TransitGatewayTableLink>>,
+    #[serde(default)]
+    pub tgw_routes: Option<Vec<TransitGatewayRoute>>,
     pub related_ids: Vec<String>,
     pub connectivity_type: Option<String>,
     pub availability_mode: Option<String>,
@@ -89,6 +106,7 @@ impl AwsResource {
             associations: vec![],
             tgw_associations: None,
             tgw_propagations: None,
+            tgw_routes: None,
             related_ids: vec![],
             connectivity_type: None,
             availability_mode: None,

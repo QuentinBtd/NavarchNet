@@ -106,6 +106,35 @@ export function renderAwsTopology(
         if (resource.kind === "transit_gateway_route_table") {
           const detail = document.createElement("details");
           detail.append(text("summary", "Observed TGW table relationships"));
+          detail.append(
+            text(
+              "p",
+              resource.tgw_routes == null
+                ? "TGW routes not queried in this observation"
+                : `TGW routes: ${resource.tgw_routes.length} · completed static/propagated search`,
+            ),
+          );
+          for (const route of resource.tgw_routes ?? []) {
+            detail.append(
+              text(
+                "p",
+                `${route.destination_cidr ?? "CIDR not reported"} · prefix list: ${route.prefix_list_id ?? "none"} · ${route.route_type ?? "unknown type"} · ${route.state ?? "unknown state"} · announcement: ${route.route_table_announcement_id ?? "none"}`,
+              ),
+            );
+            for (const attachment of route.attachments)
+              detail.append(
+                text(
+                  "p",
+                  `Route attachment: ${attachment.attachment_id ?? "not reported"} · resource: ${attachment.resource_id ?? "not reported"} · ${attachment.resource_type ?? "unknown type"}`,
+                ),
+              );
+          }
+          detail.append(
+            text(
+              "p",
+              "Prefix-list entries are unresolved; route observations are not an effective path or connectivity measurement.",
+            ),
+          );
           for (const [label, links] of [
             ["associations", resource.tgw_associations],
             ["propagations", resource.tgw_propagations],

@@ -19,6 +19,7 @@ function fixture(): TopologyView {
     associations: [],
     tgw_associations: null,
     tgw_propagations: null,
+    tgw_routes: null,
     related_ids: [],
     connectivity_type: null,
     availability_mode: null,
@@ -45,6 +46,36 @@ function fixture(): TopologyView {
   };
 }
 describe("read-only AWS observations", () => {
+  it("shows unknown, completed empty and typed TGW routes without resolving prefix lists or claiming forwarding", () => {
+    const view = fixture();
+    const row = view.topology.resources[0];
+    if (!row) throw new Error("Missing fixture");
+    row.kind = "transit_gateway_route_table";
+    let node = renderAwsTopology(view, { canConsent: false, onConsent: async () => {} });
+    expect(node.textContent).toContain("TGW routes not queried");
+    row.tgw_routes = [];
+    node = renderAwsTopology(view, { canConsent: false, onConsent: async () => {} });
+    expect(node.textContent).toContain("TGW routes: 0");
+    row.tgw_routes = [
+      {
+        destination_cidr: "::/0",
+        prefix_list_id: "pl-unresolved",
+        state: "blackhole",
+        route_type: "static",
+        route_table_announcement_id: "<img src=x>",
+        attachments: [
+          { attachment_id: "tgw-attach-fixture", resource_id: null, resource_type: "future-type" },
+        ],
+      },
+    ];
+    node = renderAwsTopology(view, { canConsent: false, onConsent: async () => {} });
+    expect(node.textContent).toContain("::/0");
+    expect(node.textContent).toContain("blackhole");
+    expect(node.textContent).toContain("pl-unresolved");
+    expect(node.textContent).toContain("Prefix-list entries are unresolved");
+    expect(node.textContent).toContain("tgw-attach-fixture");
+    expect(node.querySelector("img")).toBeNull();
+  });
   it("distinguishes unqueried TGW data from empty reads and preserves transitional relationship states", () => {
     const view = fixture();
     const row = view.topology.resources[0];

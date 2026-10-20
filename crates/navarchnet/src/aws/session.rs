@@ -16,7 +16,7 @@ use std::{
 };
 use tokio::sync::Mutex;
 
-const READ_ONLY_ACTIONS: [&str; 16] = [
+const READ_ONLY_ACTIONS: [&str; 17] = [
     "ec2:DescribeVpcs",
     "ec2:DescribeSubnets",
     "ec2:DescribeRouteTables",
@@ -28,6 +28,7 @@ const READ_ONLY_ACTIONS: [&str; 16] = [
     "ec2:DescribeTransitGatewayRouteTables",
     "ec2:GetTransitGatewayRouteTableAssociations",
     "ec2:GetTransitGatewayRouteTablePropagations",
+    "ec2:SearchTransitGatewayRoutes",
     "ram:GetResourceShares",
     "ram:GetResourceShareInvitations",
     "ram:ListResources",
@@ -324,7 +325,12 @@ mod tests {
         assert!(fields["Policy"].len() <= 2048);
         assert_eq!(policy["Statement"][0]["Effect"], "Allow");
         let actions = policy["Statement"][0]["Action"].as_array().unwrap();
-        assert_eq!(actions.len(), 16);
+        assert_eq!(actions.len(), 17);
+        assert!(
+            actions
+                .iter()
+                .any(|a| a == "ec2:SearchTransitGatewayRoutes")
+        );
         assert!(
             actions
                 .iter()
@@ -343,6 +349,7 @@ mod tests {
                         a,
                         "ec2:GetTransitGatewayRouteTableAssociations"
                             | "ec2:GetTransitGatewayRouteTablePropagations"
+                            | "ec2:SearchTransitGatewayRoutes"
                             | "ram:GetResourceShares"
                             | "ram:GetResourceShareInvitations"
                             | "ram:ListResources"

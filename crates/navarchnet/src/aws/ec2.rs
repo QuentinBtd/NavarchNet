@@ -2,6 +2,8 @@
 #[cfg(test)]
 #[path = "ec2_failure_tests.rs"]
 mod failure_tests;
+#[path = "ec2_tgw_routes.rs"]
+mod tgw_routes;
 #[cfg(test)]
 #[path = "ec2_tgw_tests.rs"]
 mod tgw_tests;
@@ -398,6 +400,7 @@ impl Ec2ReadOnly {
                     action,
                     "GetTransitGatewayRouteTableAssociations"
                         | "GetTransitGatewayRouteTablePropagations"
+                        | "SearchTransitGatewayRoutes"
                 ),
             "Unsupported scoped EC2 read"
         );
@@ -412,13 +415,25 @@ impl Ec2ReadOnly {
             form.append_pair("Action", action)
                 .append_pair("Version", "2016-11-15");
             if paginated {
-                form.append_pair("MaxResults", "100");
+                form.append_pair(
+                    "MaxResults",
+                    if action == "SearchTransitGatewayRoutes" {
+                        "1000"
+                    } else {
+                        "100"
+                    },
+                );
             }
             if let Some(value) = token {
                 form.append_pair("NextToken", value);
             }
             if let Some(value) = table_id {
                 form.append_pair("TransitGatewayRouteTableId", value);
+            }
+            if action == "SearchTransitGatewayRoutes" {
+                form.append_pair("Filter.1.Name", "type")
+                    .append_pair("Filter.1.Value.1", "static")
+                    .append_pair("Filter.1.Value.2", "propagated");
             }
             form.finish()
         };
@@ -625,6 +640,7 @@ impl Ec2ReadOnly {
             }
         }
         let mut links = 0;
+        let mut route_budget = tgw_routes::RouteBudget::default();
         for row in resources
             .iter_mut()
             .filter(|r| r.kind == ResourceKind::TransitGatewayRouteTable)
@@ -650,6 +666,10 @@ impl Ec2ReadOnly {
                     &mut requests,
                 )
                 .await?,
+            );
+            row.tgw_routes = Some(
+                self.table_routes(&row.id, &mut budget, &mut route_budget, &mut requests)
+                    .await?,
             );
         }
         Ok((resources, requests))

@@ -151,6 +151,90 @@ async fn bounds_nested_tgw_relationships_and_preserves_typed_observation_fields(
     Ok(())
 }
 #[tokio::test]
+async fn bounds_tgw_routes_and_attachments_and_preserves_legacy_unknown_without_rewriting()
+-> anyhow::Result<()> {
+    let (store, _) = support::isolated().await?;
+    let account = account(&store).await?;
+    let (_, _, generation) = store.begin_aws_discovery("operator", &account.id).await?;
+    let mut snapshot = topology(&account);
+    let route = TransitGatewayRoute {
+        destination_cidr: Some("::/0".into()),
+        prefix_list_id: None,
+        state: Some("blackhole".into()),
+        route_type: Some("static".into()),
+        route_table_announcement_id: None,
+        attachments: vec![],
+    };
+    let mut table = AwsResource::new(
+        ResourceKind::TransitGatewayRouteTable,
+        "tgw-rtb-fixture".into(),
+    );
+    table.tgw_routes = Some(vec![route; 10_001]);
+    snapshot.resources.push(table);
+    assert!(
+        store
+            .finish_aws_discovery("operator", generation, &snapshot)
+            .await
+            .is_err()
+    );
+    let routes = snapshot.resources[1].tgw_routes.as_mut().unwrap();
+    routes.truncate(1);
+    routes[0].attachments = vec![
+        TransitGatewayRouteAttachment {
+            attachment_id: Some("tgw-attach-fixture".into()),
+            resource_id: None,
+            resource_type: None,
+        };
+        10_001
+    ];
+    assert!(
+        store
+            .finish_aws_discovery("operator", generation, &snapshot)
+            .await
+            .is_err()
+    );
+    snapshot.resources[1].tgw_routes.as_mut().unwrap()[0]
+        .attachments
+        .truncate(1);
+    store
+        .finish_aws_discovery("operator", generation, &snapshot)
+        .await?;
+    let read = store.aws_topology(&account.id).await?;
+    assert_eq!(
+        read.topology.resources[1].tgw_routes.as_ref().unwrap()[0]
+            .state
+            .as_deref(),
+        Some("blackhole")
+    );
+    let (_, _, legacy_generation) = store.begin_aws_discovery("operator", &account.id).await?;
+    let mut legacy = serde_json::to_value(&snapshot)?;
+    let id = uuid::Uuid::new_v4().to_string();
+    legacy["id"] = id.clone().into();
+    legacy["resources"][1]
+        .as_object_mut()
+        .unwrap()
+        .remove("tgw_routes");
+    sqlx::query("INSERT INTO aws_topologies(id,account_id,generation,body) VALUES($1,$2,$3,$4)")
+        .bind(&id)
+        .bind(&account.id)
+        .bind(legacy_generation)
+        .bind(&legacy)
+        .execute(&store.pool)
+        .await?;
+    assert!(
+        store.aws_topology(&account.id).await?.topology.resources[1]
+            .tgw_routes
+            .is_none()
+    );
+    let stored: serde_json::Value =
+        sqlx::query_scalar("SELECT body FROM aws_topologies WHERE id=$1")
+            .bind(&id)
+            .fetch_one(&store.pool)
+            .await?;
+    assert_eq!(stored, legacy);
+    Ok(())
+}
+#[tokio::test]
 async fn verifies_registration_identity_and_keeps_private_role_configuration_out_of_views()
 -> anyhow::Result<()> {
     let (store, _) = support::isolated().await?;

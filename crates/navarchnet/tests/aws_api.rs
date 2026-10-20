@@ -63,6 +63,26 @@ impl ReadOnlyAws for AwsFixture {
             let mut foreign = vpc.clone();
             foreign.id = "vpc-02222222222222222".into();
             foreign.owner_account_id = Some("999999999999".into());
+            let mut table = AwsResource::new(
+                ResourceKind::TransitGatewayRouteTable,
+                "tgw-rtb-fixture".into(),
+            );
+            table.related_ids.push("tgw-parent".into());
+            let mut parent = AwsResource::new(ResourceKind::TransitGateway, "tgw-parent".into());
+            parent.owner_account_id = Some(account.aws_account_id.clone());
+            table.state = Some("available".into());
+            table.tgw_routes = Some(vec![TransitGatewayRoute {
+                destination_cidr: Some("0.0.0.0/0".into()),
+                prefix_list_id: None,
+                state: Some("active".into()),
+                route_type: Some("static".into()),
+                route_table_announcement_id: None,
+                attachments: vec![TransitGatewayRouteAttachment {
+                    attachment_id: Some("tgw-attach-fixture".into()),
+                    resource_id: None,
+                    resource_type: Some("vpc".into()),
+                }],
+            }]);
             Ok(AwsTopology {
                 id: uuid::Uuid::new_v4().to_string(),
                 account_id: account.id.clone(),
@@ -71,7 +91,7 @@ impl ReadOnlyAws for AwsFixture {
                 started_at: "1".into(),
                 completed_at: "2".into(),
                 session_name: "navarchnet-http-fixture".into(),
-                resources: vec![vpc, foreign],
+                resources: vec![vpc, foreign, table, parent],
                 request_ids: vec!["fixture".into()],
                 complete_for_supported_queries: true,
                 limitations: vec!["Fixture observations are not AWS connectivity evidence".into()],
@@ -220,6 +240,23 @@ async fn real_http_storage_journey_redacts_config_authorizes_writes_and_retains_
     assert_eq!(status, StatusCode::OK);
     assert_eq!(topology["execution_enabled"], false);
     assert_eq!(topology["connectivity_tested"], false);
+    let lookup = format!(
+        "/aws/accounts/{id}/tgw-route-lookup?route_table_id=tgw-rtb-fixture&destination=203.0.113.1"
+    );
+    assert_eq!(
+        request(&app, "GET", &lookup, None, None).await?.0,
+        StatusCode::UNAUTHORIZED
+    );
+    let (status, selection) = request(&app, "GET", &lookup, Some(&reader), None).await?;
+    assert_eq!(status, StatusCode::OK);
+    assert_eq!(selection["topology_id"], topology["id"]);
+    assert_eq!(selection["result"]["status"], "reported_forward");
+    assert_eq!(
+        selection["result"]["attachment_ids"][0],
+        "tgw-attach-fixture"
+    );
+    assert_eq!(selection["connectivity_tested"], false);
+    assert_eq!(selection["execution_enabled"], false);
     let path = format!("/aws/accounts/{id}/topology");
     assert_eq!(
         request(&app, "GET", &path, None, None).await?.0,

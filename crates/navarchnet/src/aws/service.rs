@@ -73,7 +73,7 @@ impl ReadOnlyAws for SessionFactory {
                 id: uuid::Uuid::new_v4().to_string(),account_id:account.id.clone(),aws_account_id:session.aws_account_id,region:session.region,started_at,completed_at:epoch()?,session_name:session.session_name,resources,request_ids,
                 complete_for_supported_queries:true,
                 limitations:vec![
-                    "Transit Gateway route contents are not yet discovered; reported associations and propagations do not establish an executable network inventory".into(),
+                    "TGW static/propagated route-search observations do not resolve prefix-list entries or establish a full effective path, SG/NACL policy, egress or isolation".into(),
                     "Resources remain unmanaged; metadata consent does not grant route-management permission".into(),
                     "No active connectivity, isolation or egress-address measurements have been performed".into()
                 ],execution_enabled:false,connectivity_tested:false

@@ -10,7 +10,7 @@ use crate::{
 use anyhow::Context;
 use axum::{
     Extension, Json, Router,
-    extract::{DefaultBodyLimit, Path, Request, State},
+    extract::{DefaultBodyLimit, Path, Query, Request, State},
     http::{HeaderValue, Method, StatusCode},
     middleware::{self, Next},
     response::{IntoResponse, Response},
@@ -59,6 +59,21 @@ pub struct ApiError {
     pub error: String,
 }
 struct Failure(anyhow::Error);
+#[derive(Deserialize, TS)]
+#[serde(deny_unknown_fields)]
+pub struct TgwLookupRequest {
+    pub route_table_id: String,
+    pub destination: String,
+}
+#[derive(Serialize, TS)]
+pub struct TgwLookupResponse {
+    pub topology_id: String,
+    pub route_table_id: String,
+    pub destination: String,
+    pub result: aws::route_lookup::TgwLookupResult,
+    pub execution_enabled: bool,
+    pub connectivity_tested: bool,
+}
 impl From<anyhow::Error> for Failure {
     fn from(e: anyhow::Error) -> Self {
         Self(e)
@@ -89,6 +104,7 @@ pub fn router(state: AppState) -> Router {
         .route("/aws/accounts", get(list_aws).post(register_aws))
         .route("/aws/accounts/{id}/discover", post(discover_aws))
         .route("/aws/accounts/{id}/topology", get(topology_aws))
+        .route("/aws/accounts/{id}/tgw-route-lookup", get(lookup_aws_route))
         .route("/aws/accounts/{id}/adoptions", post(adopt_aws))
         .route("/networks", post(create_network))
         .route("/plans", post(create_plan))
@@ -164,6 +180,26 @@ async fn snapshot(
             "read_only"
         }
         .into(),
+    }))
+}
+async fn lookup_aws_route(
+    State(s): State<AppState>,
+    Path(id): Path<String>,
+    Query(query): Query<TgwLookupRequest>,
+) -> Result<Json<TgwLookupResponse>, Failure> {
+    if query.route_table_id.len() > 2048 || query.destination.len() > 64 {
+        return Err(anyhow::anyhow!("Route lookup input exceeds its bound").into());
+    }
+    let view = s.store.aws_topology(&id).await?;
+    let result =
+        aws::route_lookup::lookup(&view.topology, &query.route_table_id, &query.destination);
+    Ok(Json(TgwLookupResponse {
+        topology_id: view.topology.id,
+        route_table_id: query.route_table_id,
+        destination: query.destination,
+        result,
+        execution_enabled: false,
+        connectivity_tested: false,
     }))
 }
 async fn list_aws(State(s): State<AppState>) -> Result<Json<Vec<VerifiedAccount>>, Failure> {

@@ -3,6 +3,7 @@ pub mod ec2;
 pub mod observation;
 pub mod persistence;
 pub mod ram;
+pub mod route_lookup;
 pub mod routing;
 pub mod service;
 pub mod session;
