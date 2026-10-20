@@ -144,6 +144,164 @@ fn registration() -> Value {
     json!({"name":"Fixture AWS account","role_arn":"arn:aws:iam::123456789012:role/Reader","region":"eu-west-1","external_id":"fixture-private-external"})
 }
 #[tokio::test]
+async fn saved_nat_reference_lookup_binds_a_subnet_entry_to_raw_metadata_without_inference()
+-> anyhow::Result<()> {
+    let (store, _) = support::isolated().await?;
+    let role: RoleRegistration = serde_json::from_value(registration())?;
+    let account = store
+        .register_aws_verified("fixture", &role, "123456789012", "nat-reference-fixture")
+        .await?;
+    let (_, _, generation) = store.begin_aws_discovery("fixture", &account.id).await?;
+    let mut vpc = AwsResource::new(ResourceKind::Vpc, "vpc-reference".into());
+    vpc.owner_account_id = Some(account.aws_account_id.clone());
+    vpc.state = Some("available".into());
+    let mut subnet = AwsResource::new(ResourceKind::Subnet, "subnet-reference".into());
+    subnet.owner_account_id = vpc.owner_account_id.clone();
+    subnet.vpc_id = Some(vpc.id.clone());
+    subnet.state = Some("available".into());
+    let mut table = AwsResource::new(ResourceKind::RouteTable, "rtb-reference".into());
+    table.owner_account_id = vpc.owner_account_id.clone();
+    table.vpc_id = Some(vpc.id.clone());
+    table.associations.push(RouteAssociation {
+        state: Some("associated".into()),
+        id: Some("rtbassoc-reference".into()),
+        subnet_id: None,
+        gateway_id: None,
+        main: true,
+    });
+    table.routes.push(ObservedRoute {
+        ipv4_destination: Some("0.0.0.0/0".into()),
+        ipv6_destination: None,
+        prefix_list_destination: None,
+        state: Some("active".into()),
+        origin: Some("CreateRoute".into()),
+        targets: [("natGatewayId".into(), "nat-reference".into())].into(),
+    });
+    let mut nat = AwsResource::new(ResourceKind::NatGateway, "nat-reference".into());
+    nat.state = Some("failed".into());
+    nat.public_ips = vec!["203.0.113.10".into()];
+    nat.nat_gateway = Some(NatGatewayMetadata {
+        route_table_id: Some("nat-literal-not-a-table".into()),
+        addresses: None,
+    });
+    let expected_nat = serde_json::to_value(&nat)?;
+    let topology = AwsTopology {
+        id: uuid::Uuid::new_v4().to_string(),
+        account_id: account.id.clone(),
+        aws_account_id: account.aws_account_id.clone(),
+        region: account.region.clone(),
+        started_at: "3".into(),
+        completed_at: "7".into(),
+        session_name: "nat-reference-fixture".into(),
+        resources: vec![vpc, subnet, table, nat],
+        request_ids: vec!["fixture".into()],
+        complete_for_supported_queries: true,
+        limitations: vec!["Record reference is not routing, ownership or NAT health proof".into()],
+        execution_enabled: false,
+        connectivity_tested: false,
+    };
+    store
+        .finish_aws_discovery("fixture", generation, &topology)
+        .await?;
+    let app = api::router(AppState {
+        store: store.clone(),
+        auth: Arc::new(Auth::demo("a".repeat(32), "r".repeat(32))?),
+        aws: None,
+    });
+    let reader = "r".repeat(32);
+    let path = format!(
+        "/aws/accounts/{}/nat-reference-lookup?subnet_id=subnet-reference&destination=203.0.113.1",
+        account.id
+    );
+    let before = request(&app, "GET", "/snapshot", Some(&reader), None)
+        .await?
+        .1;
+    let body_before: Value = sqlx::query_scalar("SELECT body FROM aws_topologies WHERE id=$1")
+        .bind(&topology.id)
+        .fetch_one(&store.pool)
+        .await?;
+    let audits_before: i64 = sqlx::query_scalar("SELECT count(*) FROM audit")
+        .fetch_one(&store.pool)
+        .await?;
+    assert_eq!(
+        request(&app, "GET", &path, None, None).await?.0,
+        StatusCode::UNAUTHORIZED
+    );
+    let (status, result) = request(&app, "GET", &path, Some(&reader), None).await?;
+    assert_eq!(status, StatusCode::OK);
+    assert_eq!(result["account_id"], account.id);
+    assert_eq!(result["topology_id"], topology.id);
+    assert_eq!(result["completed_at"], "7");
+    assert_eq!(result["subnet_id"], "subnet-reference");
+    assert_eq!(result["destination"], "203.0.113.1");
+    assert_eq!(result["execution_enabled"], false);
+    assert_eq!(result["connectivity_tested"], false);
+    assert_eq!(result["reference_only"], true);
+    assert_eq!(
+        result["result"]["subnet_lookup"],
+        serde_json::to_value(vpc_lookup::lookup(
+            &topology,
+            "subnet-reference",
+            "203.0.113.1"
+        ))?
+    );
+    assert_eq!(result["result"]["reference"]["status"], "reported_record");
+    assert_eq!(result["result"]["reference"]["resource"], expected_nat);
+    assert_eq!(result["result"]["reference"]["owner_scope"], "not_reported");
+    assert_eq!(result["result"]["reference"]["vpc_scope"], "not_reported");
+    for (field, value) in [
+        (
+            "subnet_id=subnet-reference",
+            format!("subnet_id={}", "x".repeat(2049)),
+        ),
+        (
+            "destination=203.0.113.1",
+            format!("destination={}", "x".repeat(65)),
+        ),
+    ] {
+        assert_eq!(
+            request(
+                &app,
+                "GET",
+                &path.replace(field, &value),
+                Some(&reader),
+                None
+            )
+            .await?
+            .0,
+            StatusCode::CONFLICT
+        );
+    }
+    assert_eq!(
+        request(
+            &app,
+            "GET",
+            &format!("{path}&nat_gateway_id=nat-unrequested"),
+            Some(&reader),
+            None
+        )
+        .await?
+        .0,
+        StatusCode::BAD_REQUEST
+    );
+    let body_after: Value = sqlx::query_scalar("SELECT body FROM aws_topologies WHERE id=$1")
+        .bind(&topology.id)
+        .fetch_one(&store.pool)
+        .await?;
+    let audits_after: i64 = sqlx::query_scalar("SELECT count(*) FROM audit")
+        .fetch_one(&store.pool)
+        .await?;
+    assert_eq!(body_after, body_before);
+    assert_eq!(audits_after, audits_before);
+    assert_eq!(
+        request(&app, "GET", "/snapshot", Some(&reader), None)
+            .await?
+            .1,
+        before
+    );
+    Ok(())
+}
+#[tokio::test]
 async fn saved_nat_metadata_survives_postgres_and_reader_http_without_sdk_or_inference()
 -> anyhow::Result<()> {
     let (store, _) = support::isolated().await?;

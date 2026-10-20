@@ -104,6 +104,18 @@ pub struct VpcLookupResponse {
     pub execution_enabled: bool,
     pub connectivity_tested: bool,
 }
+#[derive(Serialize, TS)]
+pub struct NatReferenceResponse {
+    pub account_id: String,
+    pub topology_id: String,
+    pub completed_at: String,
+    pub subnet_id: String,
+    pub destination: String,
+    pub result: aws::nat_reference::NatReferenceLookup,
+    pub reference_only: bool,
+    pub execution_enabled: bool,
+    pub connectivity_tested: bool,
+}
 #[derive(Deserialize, TS)]
 #[serde(deny_unknown_fields)]
 pub struct TgwSourceRequest {
@@ -180,6 +192,10 @@ pub fn router(state: AppState) -> Router {
         )
         .route("/aws/accounts/{id}/adoptions", post(adopt_aws))
         .route("/aws/accounts/{id}/vpc-route-lookup", get(lookup_aws_vpc))
+        .route(
+            "/aws/accounts/{id}/nat-reference-lookup",
+            get(lookup_aws_nat_reference),
+        )
         .route(
             "/aws/accounts/{id}/tgw-source-lookup",
             get(lookup_aws_source),
@@ -322,6 +338,28 @@ async fn lookup_aws_vpc(
         subnet_id: query.subnet_id,
         destination: query.destination,
         result,
+        execution_enabled: false,
+        connectivity_tested: false,
+    }))
+}
+async fn lookup_aws_nat_reference(
+    State(s): State<AppState>,
+    Path(id): Path<String>,
+    Query(query): Query<VpcLookupRequest>,
+) -> Result<Json<NatReferenceResponse>, Failure> {
+    if query.subnet_id.len() > 2048 || query.destination.len() > 64 {
+        return Err(anyhow::anyhow!("NAT reference input exceeds its bound").into());
+    }
+    let topology = s.store.aws_topology(&id).await?.topology;
+    let result = aws::nat_reference::lookup(&topology, &query.subnet_id, &query.destination);
+    Ok(Json(NatReferenceResponse {
+        account_id: topology.account_id,
+        topology_id: topology.id,
+        completed_at: topology.completed_at,
+        subnet_id: query.subnet_id,
+        destination: query.destination,
+        result,
+        reference_only: true,
         execution_enabled: false,
         connectivity_tested: false,
     }))

@@ -2,6 +2,7 @@
 mod attachment_subnets;
 pub mod ec2;
 pub mod ingress_lookup;
+pub mod nat_reference;
 pub mod observation;
 pub mod persistence;
 pub mod ram;

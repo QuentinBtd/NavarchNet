@@ -1,8 +1,8 @@
 use navarchnet::{
     api::*,
     aws::{
-        ingress_lookup::*, observation::*, route_lookup::*, routing::*, source_handoff::*,
-        target_lookup::*, vpc_lookup::*, *,
+        ingress_lookup::*, nat_reference::*, observation::*, route_lookup::*, routing::*,
+        source_handoff::*, target_lookup::*, vpc_lookup::*, *,
     },
     domain::*,
 };
@@ -39,6 +39,11 @@ fn main() {
         AwsResource,
         NatGatewayMetadata,
         NatGatewayAddress,
+        NatReferenceResponse,
+        NatReferenceLookup,
+        NatReferenceResult,
+        NatReferenceReason,
+        NatReferenceScope,
         ObservedRoute,
         RouteAssociation,
         TransitGatewayTableLink,
