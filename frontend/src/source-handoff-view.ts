@@ -113,11 +113,12 @@ export function renderSourceHandoff(
   let target: HTMLFieldSetElement | undefined;
   const changed = () => {
     generation++;
+    submit.disabled = network.disabled = input.disabled = false;
     target?.remove();
     target = undefined;
     output.textContent = `Inputs changed; run another saved lookup. ${caveat}`;
   };
-  input.oninput = changed;
+  input.oninput = input.onchange = changed;
   network.onchange = changed;
   form.onsubmit = (event) => {
     event.preventDefault();
@@ -139,7 +140,8 @@ export function renderSourceHandoff(
     void (async () => {
       try {
         const value = await lookup(query);
-        if (!current() || !value) {
+        if (!current()) return;
+        if (!value) {
           output.textContent = `Lookup discarded; inputs, view or session changed. ${caveat}`;
           return;
         }
@@ -201,11 +203,13 @@ export function renderSourceHandoff(
           form.append(target);
         }
       } catch (error) {
-        output.textContent = current()
-          ? `${error instanceof Error ? error.message : "Saved ingress lookup failed"}. ${caveat}`
-          : `Lookup discarded; inputs changed. ${caveat}`;
+        if (current())
+          output.textContent = `${error instanceof Error ? error.message : "Saved ingress lookup failed"}. ${caveat}`;
       } finally {
-        submit.disabled = network.disabled = input.disabled = false;
+        if (version === generation) {
+          if (!current()) output.textContent = `Inputs changed; run another saved lookup. ${caveat}`;
+          submit.disabled = network.disabled = input.disabled = false;
+        }
       }
     })();
   };

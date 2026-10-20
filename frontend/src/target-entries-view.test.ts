@@ -100,6 +100,68 @@ it("requires an explicit reported reference, uses a button not a nested form, an
     expect(status(fieldset)).toContain(text);
   expect(fieldset.querySelector("img")).toBeNull();
 });
+it("target choice retirement including ABA restores controls and fences old settlement from a newer request", async () => {
+  for (const chosen of ["target-a", "target-b"])
+    for (const rejected of [false, true]) {
+      const pending: { resolve: (body: TgwTargetResponse) => void; reject: (error: Error) => void }[] = [];
+      const fieldset = renderTargetEntries(
+        context,
+        0,
+        () => new Promise((resolve, reject) => pending.push({ resolve, reject })),
+        () => true,
+      );
+      const select = choose(fieldset),
+        button = fieldset.querySelector("button");
+      if (!button) throw new Error("Missing action");
+      click(fieldset);
+      click(fieldset);
+      expect(pending).toHaveLength(1);
+      select.value = "target-b";
+      select.dispatchEvent(new Event("change"));
+      select.value = chosen;
+      select.dispatchEvent(new Event("change"));
+      expect(button.disabled).toBe(false);
+      expect(select.disabled).toBe(false);
+      click(fieldset);
+      click(fieldset);
+      expect(pending).toHaveLength(2);
+      const old = pending[0],
+        next = pending[1];
+      if (!old || !next) throw new Error("Missing deferred replies");
+      if (rejected) old.reject(new Error("obsolete target failure"));
+      else old.resolve(value);
+      await new Promise((done) => setTimeout(done, 0));
+      expect(status(fieldset)).toContain("Reading saved");
+      expect(button.disabled).toBe(true);
+      expect(select.disabled).toBe(true);
+      next.resolve({ ...value, target_attachment_id: chosen });
+      expect(await finished(fieldset)).toContain("Saved target subnet");
+      expect(status(fieldset)).not.toContain("obsolete target failure");
+    }
+});
+it("target eventless completion retires evidence with refresh guidance and restores only its controls", async () => {
+  for (const rejected of [false, true]) {
+    let resolve!: (body: TgwTargetResponse) => void, reject!: (error: Error) => void;
+    const fieldset = renderTargetEntries(
+      context,
+      0,
+      () =>
+        new Promise((done, fail) => {
+          resolve = done;
+          reject = fail;
+        }),
+      () => true,
+    );
+    const select = choose(fieldset);
+    click(fieldset);
+    select.value = "target-b";
+    if (rejected) reject(new Error("obsolete target failure"));
+    else resolve(value);
+    expect(await finished(fieldset)).toContain("run another saved lookup");
+    expect(status(fieldset)).not.toContain("Saved target subnet");
+    expect(select.disabled).toBe(false);
+  }
+});
 it("rejects changed time/gateway/reference/destination, absent flags or AZ marker, and malformed/partial subnet shapes", async () => {
   if (value.result.status !== "reported_subnets") throw new Error("Bad fixture");
   const rows = value.result.subnets;
@@ -157,6 +219,21 @@ it("excludes duplicate requests and restores retry after failure", async () => {
   click(fieldset);
   expect(await finished(fieldset)).toContain("subnet-a");
   expect(callback).toHaveBeenCalledTimes(2);
+});
+it("target current discard restores controls for a fresh retry", async () => {
+  let calls = 0;
+  const fieldset = renderTargetEntries(
+    context,
+    0,
+    async () => (++calls === 1 ? undefined : value),
+    () => true,
+  );
+  choose(fieldset);
+  click(fieldset);
+  expect(await finished(fieldset)).toContain("discarded");
+  click(fieldset);
+  expect(await finished(fieldset)).toContain("Saved target subnet");
+  expect(calls).toBe(2);
 });
 it("discards a pending target after parent invalidation or a changed attachment choice", async () => {
   for (const change of ["parent", "choice"]) {

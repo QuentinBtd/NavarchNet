@@ -96,6 +96,71 @@ it("shows both independent snapshots and inert candidate metadata without a vali
     expect(form.textContent).toContain(text);
   expect(form.querySelector("img")).toBeNull();
 });
+it("source retirement including change-only and ABA restores controls and fences old settlement from a newer request", async () => {
+  for (const change of ["input", "change", "network", "ABA"])
+    for (const rejected of [false, true]) {
+      const pending: { resolve: (body: TgwSourceResponse) => void; reject: (error: Error) => void }[] = [];
+      const form = render(() => new Promise((resolve, reject) => pending.push({ resolve, reject })));
+      const input = form.querySelector("input"),
+        network = form.querySelector("select"),
+        button = form.querySelector("button");
+      if (!input || !network || !button) throw new Error("Missing source controls");
+      submit(form);
+      submit(form);
+      expect(pending).toHaveLength(1);
+      if (change === "network") {
+        network.value = "other";
+        network.dispatchEvent(new Event("change"));
+      } else {
+        input.value = "203.0.113.2";
+        input.dispatchEvent(new Event(change === "change" ? "change" : "input"));
+        if (change === "ABA") {
+          input.value = value.destination;
+          input.dispatchEvent(new Event("change"));
+        }
+      }
+      expect(button.disabled).toBe(false);
+      expect(input.disabled).toBe(false);
+      expect(network.disabled).toBe(false);
+      submit(form);
+      submit(form);
+      expect(pending).toHaveLength(2);
+      const old = pending[0],
+        next = pending[1];
+      if (!old || !next) throw new Error("Missing deferred replies");
+      if (rejected) old.reject(new Error("obsolete source failure"));
+      else old.resolve(value);
+      await new Promise((done) => setTimeout(done, 0));
+      expect(status(form)).toContain("Reading saved");
+      expect(button.disabled).toBe(true);
+      expect(input.disabled).toBe(true);
+      expect(network.disabled).toBe(true);
+      next.resolve({ ...value, destination: input.value, network_account_id: network.value });
+      expect(await finished(form)).toContain("Reported ingress candidate");
+      expect(status(form)).not.toContain("obsolete source failure");
+    }
+});
+it("source eventless completion retires evidence with refresh guidance and restores only its controls", async () => {
+  for (const rejected of [false, true]) {
+    let resolve!: (body: TgwSourceResponse) => void, reject!: (error: Error) => void;
+    const form = render(
+      () =>
+        new Promise((done, fail) => {
+          resolve = done;
+          reject = fail;
+        }),
+    );
+    submit(form);
+    const input = form.querySelector("input");
+    if (!input) throw new Error("Missing destination");
+    input.value = "203.0.113.2";
+    if (rejected) reject(new Error("obsolete source failure"));
+    else resolve(value);
+    expect(await finished(form)).toContain("run another saved lookup");
+    expect(status(form)).not.toContain("Reported ingress candidate");
+    expect(form.querySelector("fieldset[data-target-entries]")).toBeNull();
+  }
+});
 it("rejects mismatched scopes, omitted/non-false flags and inconsistent source/gateway evidence", async () => {
   const source = value.result.source,
     handoff = value.result.handoff;
@@ -142,6 +207,15 @@ it("prevents duplicate submits and re-enables controls after a rejection so a re
   submit(form);
   expect(await finished(form)).toContain("Reported ingress candidate");
   expect(callback).toHaveBeenCalledTimes(2);
+});
+it("source current discard restores controls for a fresh retry", async () => {
+  let calls = 0;
+  const form = render(async () => (++calls === 1 ? undefined : value));
+  submit(form);
+  expect(await finished(form)).toContain("discarded");
+  submit(form);
+  expect(await finished(form)).toContain("Reported ingress candidate");
+  expect(calls).toBe(2);
 });
 it("clears old results on input changes and discards a pending result after network selection changes", async () => {
   let resolve!: (value: TgwSourceResponse) => void;

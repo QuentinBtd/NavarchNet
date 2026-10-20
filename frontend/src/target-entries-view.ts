@@ -86,6 +86,7 @@ export function renderTargetEntries(
   let generation = 0;
   select.onchange = () => {
     generation++;
+    button.disabled = select.disabled = false;
     output.textContent = `Selection changed; run another saved lookup. ${caveat}`;
   };
   button.onclick = () => {
@@ -103,7 +104,7 @@ export function renderTargetEntries(
       target_attachment_id: select.value,
       destination: expected.destination,
     };
-    const version = generation;
+    const version = ++generation;
     const current = () =>
       isCurrent() && version === generation && select.value === query.target_attachment_id;
     button.disabled = select.disabled = true;
@@ -111,7 +112,8 @@ export function renderTargetEntries(
     void (async () => {
       try {
         const value = await lookup(query);
-        if (!current() || !value) {
+        if (!current()) return;
+        if (!value) {
           output.textContent = `Target lookup discarded; source view or inputs changed. ${caveat}`;
           return;
         }
@@ -156,11 +158,14 @@ export function renderTargetEntries(
         }
         output.textContent = `${detail}. Network observation ${expected.topologyId}, completed ${value.completed_at}. ${caveat}`;
       } catch (error) {
-        output.textContent = current()
-          ? `${error instanceof Error ? error.message : "Saved target lookup failed"}. ${caveat}`
-          : `Target lookup discarded; source view or inputs changed. ${caveat}`;
+        if (current())
+          output.textContent = `${error instanceof Error ? error.message : "Saved target lookup failed"}. ${caveat}`;
       } finally {
-        button.disabled = select.disabled = false;
+        if (version === generation) {
+          if (!current())
+            output.textContent = `Inputs or source view changed; run another saved lookup. ${caveat}`;
+          button.disabled = select.disabled = false;
+        }
       }
     })();
   };
