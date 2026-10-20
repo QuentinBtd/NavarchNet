@@ -3,6 +3,7 @@ import { renderNatMetadata } from "./nat-metadata-view";
 import type { SavedNatReferenceLookup } from "./nat-reference-view";
 import {
   renderSourceHandoff,
+  type SavedNetworkNatReferenceLookup,
   type SavedNetworkTargetLookup,
   type SavedSourceHandoff,
 } from "./source-handoff-view";
@@ -20,6 +21,7 @@ export function renderAwsTopology(
     isCurrent?: () => boolean;
     onSourceLookup?: SavedSourceHandoff;
     onTargetLookup?: SavedNetworkTargetLookup;
+    onNetworkNatReferenceLookup?: SavedNetworkNatReferenceLookup;
     networkAccounts?: VerifiedAccount[];
   },
 ): HTMLElement {
@@ -112,6 +114,7 @@ export function renderAwsTopology(
           detail.append(text("summary", "Inspect saved source-to-TGW candidate"));
           // Construct account choices only when opened, not 500 options on every subnet card.
           detail.ontoggle = () => {
+            if (options.isCurrent && !options.isCurrent()) return;
             if (detail.open && !detail.querySelector("form"))
               detail.append(
                 renderSourceHandoff(
@@ -122,6 +125,7 @@ export function renderAwsTopology(
                   options.networkAccounts ?? [],
                   lookup,
                   options.onTargetLookup,
+                  { isCurrent: options.isCurrent, lookupNatReference: options.onNetworkNatReferenceLookup },
                 ),
               );
           };

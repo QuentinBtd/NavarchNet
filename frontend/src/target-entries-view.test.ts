@@ -1,5 +1,6 @@
 import { expect, it, vi } from "vitest";
-import type { TgwTargetResponse } from "./generated";
+import type { NatReferenceResponse, TgwTargetResponse, VpcLookupRequest } from "./generated";
+import type { NatReferenceParent } from "./nat-reference-view";
 import { renderTargetEntries } from "./target-entries-view";
 
 // Malformed/deferred renderer fixtures, not backend, browser or AWS acceptance.
@@ -60,9 +61,285 @@ function choose(fieldset: HTMLFieldSetElement) {
   select.value = "target-a";
   return select;
 }
+function joinedBody(): TgwTargetResponse {
+  const body = structuredClone(value);
+  if (body.result.status !== "reported_subnets") throw new Error("Bad fixture");
+  const first = body.result.subnets[0],
+    second = body.result.subnets[1];
+  if (!first || !second) throw new Error("Missing rows");
+  second.lookup = structuredClone(first.lookup);
+  return body;
+}
+function natBody(query: VpcLookupRequest): NatReferenceResponse {
+  const body = joinedBody();
+  if (body.result.status !== "reported_subnets") throw new Error("Bad fixture");
+  const row = body.result.subnets.find((row) => row.subnet_id === query.subnet_id);
+  if (!row) throw new Error("Unknown subnet");
+  return {
+    account_id: "network",
+    topology_id: "network-snapshot",
+    completed_at: "4",
+    ...query,
+    reference_only: true,
+    execution_enabled: false,
+    connectivity_tested: false,
+    result: {
+      subnet_lookup: row.lookup,
+      reference: {
+        status: "reported_record",
+        owner_scope: "reported_same",
+        vpc_scope: "not_reported",
+        resource: {
+          kind: "nat_gateway",
+          id: "<img src=x>",
+          owner_account_id: "210987654321",
+          vpc_id: null,
+          subnet_id: null,
+          az_id: null,
+          state: "failed",
+          cidrs: [],
+          public_ips: [],
+          private_ips: [],
+          tags: {},
+          routes: [],
+          associations: [],
+          tgw_associations: null,
+          tgw_propagations: null,
+          tgw_routes: null,
+          related_ids: [],
+          connectivity_type: null,
+          availability_mode: "future-mode",
+          nat_gateway: null,
+          managed: false,
+        },
+      },
+    },
+  };
+}
+function natParent(
+  lookup: NatReferenceParent["lookup"] = async (query) => natBody(query),
+): Omit<NatReferenceParent, "subnetVpcId"> {
+  return {
+    snapshot: {
+      id: "network-snapshot",
+      completed_at: "4",
+      account_id: "network",
+      aws_account_id: "210987654321",
+      execution_enabled: false,
+      connectivity_tested: false,
+    },
+    lookup,
+    isCurrent: () => true,
+  };
+}
+it("stages every subnet NAT action without deduplicating a shared ID and binds B's literal fields", async () => {
+  const calls: VpcLookupRequest[] = [];
+  const fieldset = renderTargetEntries(
+    context,
+    0,
+    async () => joinedBody(),
+    () => true,
+    natParent(async (query) => {
+      calls.push(query);
+      return natBody(query);
+    }),
+  );
+  choose(fieldset);
+  click(fieldset);
+  await finished(fieldset);
+  const children = fieldset.querySelectorAll<HTMLFieldSetElement>("fieldset[data-nat-reference]");
+  expect(children).toHaveLength(2);
+  expect(calls).toHaveLength(0);
+  for (const [index, child] of [...children].entries()) {
+    child.querySelector("button")?.click();
+    await new Promise((done) => setTimeout(done, 0));
+    expect(child.textContent).toContain("Referenced saved NAT record: <img src=x>");
+    expect(child.textContent).toContain("reported_same");
+    expect(child.textContent).toContain("not_reported");
+    expect(calls[index]).toEqual({
+      subnet_id: index === 0 ? "subnet-a" : "subnet-b",
+      destination: context.destination,
+    });
+  }
+  expect(fieldset.querySelector("img, form, input")).toBeNull();
+  expect(status(fieldset)).toContain("subnet-a");
+  expect(status(fieldset)).toContain("subnet-b");
+});
+it("validates a malformed final NAT row and supplied snapshot before exposing any prefix children", async () => {
+  for (const bad of ["origin", "target", "snapshot", "time", "flags", "account"]) {
+    const body = joinedBody();
+    let parent = natParent();
+    if (body.result.status !== "reported_subnets") throw new Error("Bad fixture");
+    const last = body.result.subnets[1];
+    if (last?.lookup.status !== "reported" || last.lookup.lookup.status !== "reported_route")
+      throw new Error("Bad row");
+    if (bad === "origin") last.lookup.lookup.origin = "";
+    if (bad === "target") last.lookup.lookup.target = { kind: "nat_gateway", id: "" };
+    if (bad === "snapshot") parent = { ...parent, snapshot: { ...parent.snapshot, id: "source-snapshot" } };
+    if (bad === "time") parent = { ...parent, snapshot: { ...parent.snapshot, completed_at: "2" } };
+    if (bad === "flags") parent = { ...parent, snapshot: { ...parent.snapshot, execution_enabled: true } };
+    if (bad === "account") parent = { ...parent, snapshot: { ...parent.snapshot, account_id: "" } };
+    const fieldset = renderTargetEntries(
+      context,
+      0,
+      async () => body,
+      () => true,
+      parent,
+    );
+    choose(fieldset);
+    click(fieldset);
+    await finished(fieldset);
+    expect(fieldset.querySelector("fieldset[data-nat-reference]")).toBeNull();
+    expect(status(fieldset)).not.toContain("Saved target subnet");
+  }
+});
+it("retired target NAT replies and retained actions cannot populate or unlock a newer child", async () => {
+  for (const retirement of ["resubmit", "input", "ABA", "parent"])
+    for (const rejected of [false, true]) {
+      const pending: {
+        query: VpcLookupRequest;
+        resolve: (body: NatReferenceResponse) => void;
+        reject: (error: Error) => void;
+      }[] = [];
+      let live = true;
+      const fieldset = renderTargetEntries(
+        context,
+        0,
+        async () => joinedBody(),
+        () => live,
+        natParent((query) => new Promise((resolve, reject) => pending.push({ query, resolve, reject }))),
+      );
+      const select = choose(fieldset);
+      click(fieldset);
+      await finished(fieldset);
+      const child = fieldset.querySelector<HTMLFieldSetElement>("fieldset[data-nat-reference]"),
+        action = child?.querySelector("button");
+      if (!child || !action) throw new Error("Missing child");
+      action.click();
+      if (retirement === "parent") live = false;
+      else if (retirement === "resubmit") {
+        click(fieldset);
+        await finished(fieldset);
+      } else {
+        select.value = "target-b";
+        select.dispatchEvent(new Event("input"));
+        if (retirement === "ABA") {
+          select.value = "target-a";
+          select.dispatchEvent(new Event("change"));
+        }
+      }
+      action.disabled = false;
+      action.click();
+      expect(pending).toHaveLength(1);
+      if (retirement === "resubmit")
+        fieldset.querySelector<HTMLButtonElement>("fieldset[data-nat-reference] button")?.click();
+      const old = pending[0];
+      if (!old) throw new Error("Missing pending");
+      if (rejected) old.reject(new Error("obsolete NAT failure"));
+      else old.resolve(natBody(old.query));
+      await new Promise((done) => setTimeout(done, 0));
+      expect(child.querySelector("details")).toBeNull();
+      expect(child.textContent).not.toContain("obsolete NAT failure");
+      if (retirement === "resubmit") {
+        const next = fieldset.querySelector<HTMLFieldSetElement>("fieldset[data-nat-reference]");
+        expect(next?.querySelector("button")?.disabled).toBe(true);
+        expect(next?.textContent).toContain("Reading saved NAT");
+        const current = pending[1];
+        if (!current) throw new Error("Missing newer pending");
+        current.resolve(natBody(current.query));
+        await new Promise((done) => setTimeout(done, 0));
+        expect(next?.textContent).toContain("Referenced saved NAT record:");
+      }
+    }
+});
 function click(fieldset: HTMLFieldSetElement) {
   fieldset.querySelector("button")?.click();
 }
+it("rejects A's envelope or inconsistent owner scope through the composition but permits literal different ownership", async () => {
+  for (const fault of ["account", "time", "entry", "scope", "different"]) {
+    const fieldset = renderTargetEntries(
+      context,
+      0,
+      async () => joinedBody(),
+      () => true,
+      natParent(async (query) => {
+        const body = natBody(query);
+        if (fault === "account") body.account_id = "source-registration";
+        if (fault === "time") body.completed_at = "2";
+        if (fault === "entry" && body.result.subnet_lookup.status === "reported")
+          body.result.subnet_lookup.route_table_id = "other";
+        if (body.result.reference.status === "reported_record" && ["scope", "different"].includes(fault)) {
+          body.result.reference.resource.owner_account_id = "123456789012";
+          if (fault === "different") body.result.reference.owner_scope = "reported_different";
+        }
+        return body;
+      }),
+    );
+    choose(fieldset);
+    click(fieldset);
+    await finished(fieldset);
+    const child = fieldset.querySelector<HTMLFieldSetElement>("fieldset[data-nat-reference]");
+    if (!child) throw new Error("Missing child");
+    child.querySelector("button")?.click();
+    await new Promise((done) => setTimeout(done, 0));
+    expect(status(fieldset)).toContain("Saved target subnet");
+    if (fault === "different") {
+      expect(child.textContent).toContain("reported_different");
+      expect(child.querySelector("details")).not.toBeNull();
+    } else {
+      expect(child.querySelector("details")).toBeNull();
+      expect(child.textContent).toContain("did not match");
+    }
+  }
+});
+it("retained metadata continuations inherit target retirement without another query or appended tuples", async () => {
+  const fieldset = renderTargetEntries(
+    context,
+    0,
+    async () => joinedBody(),
+    () => true,
+    natParent(async (query) => {
+      const body = natBody(query);
+      if (body.result.reference.status !== "reported_record") throw new Error("Bad fixture");
+      body.result.reference.resource.nat_gateway = {
+        route_table_id: "literal",
+        addresses: Array.from({ length: 101 }, () => ({
+          allocation_id: null,
+          association_id: null,
+          network_interface_id: null,
+          public_ip: null,
+          private_ip: null,
+          az_name: null,
+          az_id: null,
+          is_primary: null,
+          status: "failed",
+        })),
+      };
+      return body;
+    }),
+  );
+  const select = choose(fieldset);
+  click(fieldset);
+  await finished(fieldset);
+  const child = fieldset.querySelector<HTMLFieldSetElement>("fieldset[data-nat-reference]");
+  if (!child) throw new Error("Missing child");
+  child.querySelector("button")?.click();
+  await new Promise((done) => setTimeout(done, 0));
+  const detail = child.querySelector("details");
+  if (!detail) throw new Error("Missing metadata");
+  detail.open = true;
+  detail.dispatchEvent(new Event("toggle"));
+  expect(detail.querySelectorAll("[data-nat-address]")).toHaveLength(50);
+  const more = detail.querySelector<HTMLButtonElement>("button[data-nat-more]");
+  select.value = "target-b";
+  select.dispatchEvent(new Event("change"));
+  more?.click();
+  detail.open = false;
+  detail.open = true;
+  detail.dispatchEvent(new Event("toggle"));
+  expect(detail.querySelectorAll("[data-nat-address]")).toHaveLength(50);
+  expect(fieldset.querySelector("fieldset[data-nat-reference]")).toBeNull();
+});
 const status = (fieldset: HTMLFieldSetElement) => fieldset.querySelector('[role="status"]')?.textContent;
 async function finished(fieldset: HTMLFieldSetElement) {
   await expect.poll(() => status(fieldset)).not.toContain("Reading saved");

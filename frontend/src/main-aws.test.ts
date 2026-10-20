@@ -560,6 +560,184 @@ afterEach(() => {
   vi.unstubAllGlobals();
   document.body.replaceChildren();
 });
+it("cross-account NAT requests stay bound to B under A and retire across parent and view generations despite ignored abort", async () => {
+  for (const retirement of [
+    "switch",
+    "ABA",
+    "reload",
+    "logout",
+    "source resubmit",
+    "source change",
+    "network ABA",
+    "target resubmit",
+    "attachment input",
+  ])
+    for (const failed of [false, true]) {
+      const old = deferred(),
+        paths: string[] = [];
+      const nat = natReply();
+      nat.account_id = "account-b";
+      nat.topology_id = "snapshot-account-b";
+      nat.completed_at = "4";
+      nat.subnet_id = "subnet-target";
+      if (nat.result.reference.status !== "reported_record") throw new Error("Bad fixture");
+      nat.result.reference.resource.owner_account_id = "210987654321";
+      nat.result.reference.owner_scope = "reported_same";
+      const sourceEntry = structuredClone(nat.result.subnet_lookup);
+      if (sourceEntry.status !== "reported" || sourceEntry.lookup.status !== "reported_route")
+        throw new Error("Bad entry");
+      sourceEntry.lookup.target = { kind: "transit_gateway", id: "tgw-cross" };
+      const source: TgwSourceResponse = {
+        source_topology_id: "snapshot-account-a",
+        network_topology_id: nat.topology_id,
+        source_completed_at: "2",
+        network_completed_at: "4",
+        network_account_id: "account-b",
+        subnet_id: "subnet-account-a",
+        destination: nat.destination,
+        execution_enabled: false,
+        connectivity_tested: false,
+        result: {
+          source: sourceEntry,
+          handoff: {
+            status: "reported_candidate",
+            transit_gateway_id: "tgw-cross",
+            ingress_attachment_id: "ingress",
+            attachment_subnet_id: "attachment-subnet",
+            az_id: "euw1-az1",
+            route_table_id: "tgw-table",
+            lookup: {
+              status: "reported_forward",
+              destination_cidr: "0.0.0.0/0",
+              route_type: "static",
+              attachment_ids: ["egress"],
+            },
+          },
+        },
+      };
+      const target: TgwTargetResponse = {
+        topology_id: nat.topology_id,
+        completed_at: "4",
+        transit_gateway_id: "tgw-cross",
+        target_attachment_id: "egress",
+        destination: nat.destination,
+        az_selection: "not_inferred",
+        execution_enabled: false,
+        connectivity_tested: false,
+        result: {
+          status: "reported_subnets",
+          vpc_id: "vpc-target",
+          subnets: [{ subnet_id: nat.subnet_id, az_id: "euw1-az1", lookup: nat.result.subnet_lookup }],
+        },
+      };
+      await boot(
+        async (path) => {
+          paths.push(path);
+          if (path.includes("nat-reference-lookup")) return old.promise;
+          if (path.includes("tgw-source-lookup")) return response(source);
+          if (path.includes("tgw-target-lookup")) return response(target);
+          const view = vpcTopology(path.includes("account-a") ? "account-a" : "account-b");
+          if (view.topology.account_id === "account-b") {
+            view.topology.aws_account_id = "210987654321";
+            view.topology.completed_at = "4";
+          }
+          return response(view);
+        },
+        {
+          ...snapshot,
+          aws_accounts: [account("account-a"), { ...account("account-b"), aws_account_id: "210987654321" }],
+        },
+      );
+      select("account-a");
+      await vi.waitFor(() => expect(document.querySelector("form[data-vpc-route-lookup]")).not.toBeNull());
+      const detail = [...document.querySelectorAll<HTMLDetailsElement>("#aws-topology details")].find(
+        (node) => node.querySelector("summary")?.textContent === "Inspect saved source-to-TGW candidate",
+      );
+      if (!detail) throw new Error("Missing source detail");
+      detail.open = true;
+      detail.dispatchEvent(new Event("toggle"));
+      const form = detail.querySelector<HTMLFormElement>("form"),
+        network = form?.querySelector("select"),
+        destination = form?.querySelector("input");
+      if (!form || !network || !destination) throw new Error("Missing source controls");
+      network.value = "account-b";
+      destination.value = nat.destination;
+      form.dispatchEvent(new Event("submit", { cancelable: true }));
+      await vi.waitFor(() => expect(form.querySelector("fieldset[data-target-entries]")).not.toBeNull());
+      const panel = form.querySelector<HTMLFieldSetElement>("fieldset[data-target-entries]"),
+        attachment = panel?.querySelector("select"),
+        targetButton = panel?.querySelector("button");
+      if (!panel || !attachment || !targetButton) throw new Error("Missing target controls");
+      attachment.value = "egress";
+      targetButton.click();
+      await vi.waitFor(() => expect(panel.querySelector("fieldset[data-nat-reference]")).not.toBeNull());
+      const child = panel.querySelector<HTMLFieldSetElement>("fieldset[data-nat-reference]"),
+        action = child?.querySelector("button");
+      if (!child || !action) throw new Error("Missing child");
+      expect(paths.filter((path) => path.includes("nat-reference-lookup"))).toHaveLength(0);
+      action.click();
+      expect(paths.filter((path) => path.includes("nat-reference-lookup"))).toEqual([
+        "/api/v1/aws/accounts/account-b/nat-reference-lookup?subnet_id=subnet-target&destination=203.0.113.1",
+      ]);
+      expect(paths.some((path) => path.includes("account-a/tgw-source-lookup"))).toBe(true);
+      expect(paths.some((path) => path.includes("account-b/tgw-target-lookup"))).toBe(true);
+      if (retirement === "logout") document.querySelector<HTMLButtonElement>("#logout")?.click();
+      else if (retirement === "switch" || retirement === "ABA" || retirement === "reload") {
+        select(retirement === "reload" ? "account-a" : "account-b");
+        await vi.waitFor(() =>
+          expect(document.querySelector("#aws-topology")?.textContent).toContain(
+            retirement === "reload" ? "subnet-account-a" : "subnet-account-b",
+          ),
+        );
+        if (retirement === "ABA") {
+          select("account-a");
+          await vi.waitFor(() =>
+            expect(document.querySelector("#aws-topology")?.textContent).toContain("subnet-account-a"),
+          );
+        }
+      } else if (retirement === "source resubmit")
+        form.dispatchEvent(new Event("submit", { cancelable: true }));
+      else if (retirement === "source change") {
+        destination.value = "203.0.113.2";
+        destination.dispatchEvent(new Event("change"));
+      } else if (retirement === "network ABA") {
+        network.value = "account-a";
+        network.dispatchEvent(new Event("input"));
+        network.value = "account-b";
+        network.dispatchEvent(new Event("change"));
+      } else if (retirement === "target resubmit") targetButton.click();
+      else {
+        attachment.value = "";
+        attachment.dispatchEvent(new Event("input"));
+      }
+      action.disabled = false;
+      action.click();
+      expect(paths.filter((path) => path.includes("nat-reference-lookup"))).toHaveLength(1);
+      old.resolve(
+        failed
+          ? new Response(JSON.stringify({ error: "obsolete cross-account failure" }), { status: 500 })
+          : response(nat),
+      );
+      await new Promise((done) => setTimeout(done, 0));
+      expect(child.querySelector("details")).toBeNull();
+      expect(document.querySelector("#aws-topology")?.textContent).not.toContain(
+        "Referenced saved NAT record:",
+      );
+      expect(document.querySelector("#aws-topology")?.textContent).not.toContain(
+        "obsolete cross-account failure",
+      );
+      if (["switch", "ABA", "reload", "logout"].includes(retirement)) {
+        form.dispatchEvent(new Event("submit", { cancelable: true }));
+        targetButton.click();
+        detail.querySelector("form")?.remove();
+        detail.dispatchEvent(new Event("toggle"));
+        expect(detail.querySelector("form")).toBeNull();
+      }
+      expect(paths.filter((path) => path.includes("nat-reference-lookup"))).toHaveLength(1);
+      vi.unstubAllGlobals();
+      document.body.replaceChildren();
+    }
+}, 15_000);
 it("late account topology cannot replace a newer selected account", async () => {
   const old = deferred();
   await boot(async (path) => (path.includes("account-a") ? old.promise : response(topology("account-b"))));

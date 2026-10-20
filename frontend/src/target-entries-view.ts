@@ -1,4 +1,5 @@
 import type { TgwTargetRequest, TgwTargetResponse, VpcSubnetLookupResult } from "./generated";
+import { type NatReferenceParent, renderNatReference } from "./nat-reference-view";
 import { text } from "./view";
 
 export type SavedTargetLookup = (query: TgwTargetRequest) => Promise<TgwTargetResponse | undefined>;
@@ -51,7 +52,9 @@ export function renderTargetEntries(
   index: number,
   lookup: SavedTargetLookup,
   isCurrent: () => boolean,
+  natReference?: Omit<NatReferenceParent, "subnetVpcId">,
 ): HTMLFieldSetElement {
+  const natParent = natReference ? { ...natReference, snapshot: { ...natReference.snapshot } } : undefined;
   const expected = { ...context, attachmentIds: context.attachmentIds.map(nonempty) };
   for (const value of [expected.topologyId, expected.completedAt, expected.gatewayId, expected.destination])
     nonempty(value);
@@ -82,16 +85,22 @@ export function renderTargetEntries(
   const output = text("p", caveat);
   output.setAttribute("role", "status");
   output.setAttribute("aria-live", "polite");
-  root.append(label, select, button, output);
+  const children = document.createElement("div");
+  const clearChildren = () => {
+    for (const child of children.querySelectorAll("fieldset[data-nat-reference]")) child.replaceChildren();
+    children.replaceChildren();
+  };
+  root.append(label, select, button, output, children);
   let generation = 0;
-  select.onchange = () => {
+  select.oninput = select.onchange = () => {
     generation++;
+    clearChildren();
     button.disabled = select.disabled = false;
     output.textContent = `Selection changed; run another saved lookup. ${caveat}`;
   };
   button.onclick = () => {
     if (button.disabled) return;
-    if (!isCurrent()) {
+    if (!isCurrent() || (natParent && !natParent.isCurrent())) {
       output.textContent = `Target lookup discarded; source view or inputs changed. ${caveat}`;
       return;
     }
@@ -105,8 +114,12 @@ export function renderTargetEntries(
       destination: expected.destination,
     };
     const version = ++generation;
+    clearChildren();
     const current = () =>
-      isCurrent() && version === generation && select.value === query.target_attachment_id;
+      isCurrent() &&
+      (!natParent || natParent.isCurrent()) &&
+      version === generation &&
+      select.value === query.target_attachment_id;
     button.disabled = select.disabled = true;
     output.textContent = "Reading saved target subnet entries…";
     void (async () => {
@@ -131,6 +144,19 @@ export function renderTargetEntries(
           value.connectivity_tested !== false
         )
           throw new Error(scopeError);
+        if (
+          natParent &&
+          (natParent.snapshot.id !== expected.topologyId ||
+            natParent.snapshot.completed_at !== expected.completedAt ||
+            natParent.snapshot.execution_enabled !== false ||
+            natParent.snapshot.connectivity_tested !== false)
+        )
+          throw new Error(scopeError);
+        if (natParent) {
+          nonempty(natParent.snapshot.account_id);
+          nonempty(natParent.snapshot.aws_account_id);
+        }
+        const staged = document.createDocumentFragment();
         let detail: string;
         switch (value.result.status) {
           case "unresolved":
@@ -151,12 +177,37 @@ export function renderTargetEntries(
               return `Saved target subnet ${id} · AZ ID ${zone}: ${entryDescription(row.lookup)}`;
             });
             detail = `VPC ${value.result.vpc_id}. ${descriptions.join(". ")}`;
+            if (natParent)
+              for (const row of rows) {
+                if (
+                  row.lookup.status === "reported" &&
+                  row.lookup.lookup.status === "reported_route" &&
+                  row.lookup.lookup.target.kind === "nat_gateway"
+                ) {
+                  const wrapper = document.createElement("div");
+                  wrapper.dataset.targetNatSubnet = row.subnet_id;
+                  wrapper.append(
+                    text(
+                      "p",
+                      `Saved target subnet ${row.subnet_id} · AZ ID ${row.az_id} · traffic AZ is not inferred`,
+                    ),
+                    renderNatReference(
+                      { ...natParent, subnetVpcId: value.result.vpc_id },
+                      { subnet_id: row.subnet_id, destination: query.destination },
+                      row.lookup,
+                      current,
+                    ),
+                  );
+                  staged.append(wrapper);
+                }
+              }
             break;
           }
           default:
             throw new Error(scopeError);
         }
         output.textContent = `${detail}. Network observation ${expected.topologyId}, completed ${value.completed_at}. ${caveat}`;
+        children.replaceChildren(staged);
       } catch (error) {
         if (current())
           output.textContent = `${error instanceof Error ? error.message : "Saved target lookup failed"}. ${caveat}`;

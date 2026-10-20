@@ -262,6 +262,20 @@ async function loadAwsTopology(id: string) {
           throw error;
         }
       },
+      onNetworkNatReferenceLookup: async (networkAccountId, query) => {
+        if (version !== awsViewVersion || selectedAwsAccountId !== id) return;
+        try {
+          const parameters = new URLSearchParams(query);
+          const result = await request<NatReferenceResponse>(
+            `/aws/accounts/${encodeURIComponent(networkAccountId)}/nat-reference-lookup?${parameters}`,
+          );
+          if (version !== awsViewVersion || selectedAwsAccountId !== id) return;
+          return result;
+        } catch (error) {
+          if (version !== awsViewVersion || selectedAwsAccountId !== id) return;
+          throw error;
+        }
+      },
       onVpcLookup: async (query) => {
         if (version !== awsViewVersion || selectedAwsAccountId !== id) return;
         try {

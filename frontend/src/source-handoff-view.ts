@@ -1,4 +1,5 @@
 import type {
+  NatReferenceResponse,
   RouteTableSelection,
   TgwLookupResult,
   TgwSourceRequest,
@@ -6,8 +7,10 @@ import type {
   TgwTargetRequest,
   TgwTargetResponse,
   VerifiedAccount,
+  VpcLookupRequest,
   VpcSubnetLookupResult,
 } from "./generated";
+import type { NatReferenceParent } from "./nat-reference-view";
 import { renderTargetEntries } from "./target-entries-view";
 import { text } from "./view";
 
@@ -17,6 +20,10 @@ export type SavedNetworkTargetLookup = (
   query: TgwTargetRequest,
 ) => Promise<TgwTargetResponse | undefined>;
 const scopeError = "Lookup response did not match the requested saved source/network scope";
+export type SavedNetworkNatReferenceLookup = (
+  networkAccountId: string,
+  query: VpcLookupRequest,
+) => Promise<NatReferenceResponse | undefined>;
 const caveat =
   "Independent saved observations, not a validated path. Target health, attachment-subnet/return routes and connectivity remain untested.";
 function nonempty(value: unknown): string {
@@ -77,10 +84,15 @@ export function renderSourceHandoff(
   subnetId: string,
   selection: RouteTableSelection,
   index: number,
-  accounts: Pick<VerifiedAccount, "id" | "name" | "region">[],
+  accounts: (Pick<VerifiedAccount, "id" | "name" | "region"> &
+    Partial<Pick<VerifiedAccount, "aws_account_id">>)[],
   lookup: SavedSourceHandoff,
   lookupTarget?: SavedNetworkTargetLookup,
+  options: { isCurrent?: () => boolean; lookupNatReference?: SavedNetworkNatReferenceLookup } = {},
 ): HTMLFormElement {
+  accounts = accounts.map((account) => ({ ...account }));
+  const upstreamCurrent = options.isCurrent ?? (() => true);
+  const lookupNat = options.lookupNatReference;
   const form = document.createElement("form");
   form.dataset.sourceHandoff = subnetId;
   const networkLabel = text("label", "Network account / region (saved observation)");
@@ -111,27 +123,34 @@ export function renderSourceHandoff(
   form.append(networkLabel, network, label, input, submit, output);
   let generation = 0;
   let target: HTMLFieldSetElement | undefined;
+  const retireTarget = () => {
+    for (const child of target?.querySelectorAll("fieldset[data-nat-reference]") ?? [])
+      child.replaceChildren();
+    target?.remove();
+    target = undefined;
+  };
   const changed = () => {
     generation++;
     submit.disabled = network.disabled = input.disabled = false;
-    target?.remove();
-    target = undefined;
+    retireTarget();
     output.textContent = `Inputs changed; run another saved lookup. ${caveat}`;
   };
   input.oninput = input.onchange = changed;
-  network.onchange = changed;
+  network.oninput = network.onchange = changed;
   form.onsubmit = (event) => {
     event.preventDefault();
-    if (submit.disabled) return;
+    if (submit.disabled || !upstreamCurrent()) return;
     if (!accounts.some((account) => account.id === network.value)) {
       output.textContent = `Select a saved network account. ${caveat}`;
       return;
     }
     const query = { network_account_id: network.value, subnet_id: subnetId, destination: input.value };
+    const registrations = accounts.filter((account) => account.id === query.network_account_id);
+    const registration = registrations.length === 1 ? registrations[0] : undefined;
     const version = ++generation;
-    target?.remove();
-    target = undefined;
+    retireTarget();
     const current = () =>
+      upstreamCurrent() &&
       version === generation &&
       network.value === query.network_account_id &&
       input.value === query.destination;
@@ -188,6 +207,27 @@ export function renderSourceHandoff(
           handoff.status === "reported_candidate" &&
           handoff.lookup.status === "reported_forward"
         ) {
+          let natParent: Omit<NatReferenceParent, "subnetVpcId"> | undefined;
+          if (
+            lookupNat &&
+            registration &&
+            typeof registration.aws_account_id === "string" &&
+            registration.aws_account_id.length
+          ) {
+            const networkId = registration.id;
+            natParent = {
+              snapshot: {
+                id: value.network_topology_id,
+                account_id: networkId,
+                aws_account_id: registration.aws_account_id,
+                completed_at: value.network_completed_at,
+                execution_enabled: value.execution_enabled,
+                connectivity_tested: value.connectivity_tested,
+              },
+              lookup: (natQuery) => lookupNat(networkId, natQuery),
+              isCurrent: current,
+            };
+          }
           target = renderTargetEntries(
             {
               topologyId: value.network_topology_id,
@@ -197,9 +237,17 @@ export function renderSourceHandoff(
               destination: query.destination,
             },
             index,
-            (targetQuery) => lookupTarget(value.network_account_id, targetQuery),
+            (targetQuery) => lookupTarget(query.network_account_id, targetQuery),
             current,
+            natParent,
           );
+          if (lookupNat && !natParent)
+            target.append(
+              text(
+                "p",
+                "Referenced NAT inspection unavailable: a uniquely bound saved network AWS-account field is required.",
+              ),
+            );
           form.append(target);
         }
       } catch (error) {

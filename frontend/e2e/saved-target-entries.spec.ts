@@ -81,7 +81,7 @@ test("real browser: reader explicitly follows a reported attachment into same-sn
     expect(body.az_selection).toBe("not_inferred");
     expect(body.execution_enabled).toBe(false);
     expect(body.connectivity_tested).toBe(false);
-    const output = target.getByRole("status");
+    const output = target.locator(":scope > [role=status]");
     await expect(output).toContainText(expected);
     for (const text of [
       "subnet-browser-b",

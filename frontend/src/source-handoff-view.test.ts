@@ -96,6 +96,118 @@ it("shows both independent snapshots and inert candidate metadata without a vali
     expect(form.textContent).toContain(text);
   expect(form.querySelector("img")).toBeNull();
 });
+function targetNatFixture(): TgwTargetResponse {
+  return {
+    topology_id: "network-snapshot",
+    completed_at: "4",
+    transit_gateway_id: "tgw-network",
+    target_attachment_id: "egress",
+    destination: value.destination,
+    az_selection: "not_inferred",
+    execution_enabled: false,
+    connectivity_tested: false,
+    result: {
+      status: "reported_subnets",
+      vpc_id: "vpc-target",
+      subnets: [
+        {
+          subnet_id: "subnet-target",
+          az_id: "euw1-az1",
+          lookup: {
+            status: "reported",
+            route_table_id: "rtb-network",
+            source: "implicit_main",
+            lookup: {
+              status: "reported_route",
+              destination_cidr: "0.0.0.0/0",
+              origin: "CreateRoute",
+              target: { kind: "nat_gateway", id: "nat-saved" },
+            },
+          },
+        },
+      ],
+    },
+  };
+}
+async function sourceNatFixture(awsId: unknown, duplicate = false) {
+  let live = true;
+  const calls: unknown[] = [];
+  const account = {
+    id: "network",
+    name: "Network",
+    region: "eu-west-1",
+    aws_account_id: awsId as string | undefined,
+  };
+  const form = renderSourceHandoff(
+    "source-snapshot",
+    "subnet-source",
+    selection,
+    0,
+    duplicate ? [account, { ...account }] : [account],
+    async () => structuredClone(value),
+    async () => targetNatFixture(),
+    {
+      isCurrent: () => live,
+      lookupNatReference: async (id, query) => {
+        calls.push({ id, query });
+        return undefined;
+      },
+    },
+  );
+  // Caller mutation cannot replace already captured registration identity.
+  account.id = "source-registration";
+  account.aws_account_id = "123456789012";
+  const network = form.querySelector("select"),
+    input = form.querySelector("input");
+  if (!network || !input) throw new Error("Missing controls");
+  network.value = "network";
+  input.value = value.destination;
+  submit(form);
+  await finished(form);
+  const target = form.querySelector<HTMLFieldSetElement>("fieldset[data-target-entries]"),
+    choice = target?.querySelector("select");
+  if (!target || !choice) throw new Error("Missing target");
+  choice.value = "egress";
+  target.querySelector("button")?.click();
+  await expect
+    .poll(() => target.querySelector('[role="status"]')?.textContent)
+    .toContain("Saved target subnet");
+  return {
+    form,
+    target,
+    calls,
+    retire: () => {
+      live = false;
+    },
+  };
+}
+it("captures B's registration for NAT reads without changing legacy Source/Target callers", async () => {
+  const view = await sourceNatFixture("210987654321");
+  const child = view.target.querySelector<HTMLFieldSetElement>("fieldset[data-nat-reference]");
+  if (!child) throw new Error("Missing joined child");
+  expect(view.calls).toHaveLength(0);
+  expect(view.form.checkValidity()).toBe(true);
+  child.querySelector("button")?.click();
+  await expect.poll(() => child.textContent).toContain("discarded");
+  expect(view.calls).toEqual([
+    { id: "network", query: { subnet_id: "subnet-target", destination: value.destination } },
+  ]);
+  view.retire();
+  child.querySelector("button")?.click();
+  submit(view.form);
+  expect(view.calls).toHaveLength(1);
+});
+it("missing malformed or ambiguous network AWS fields preserve target evidence without guessing NAT provenance", async () => {
+  for (const awsId of [undefined, null, "", false, {}]) {
+    const view = await sourceNatFixture(awsId);
+    expect(view.target.querySelector("fieldset[data-nat-reference]")).toBeNull();
+    expect(view.target.textContent).toContain("uniquely bound saved network AWS-account field");
+    expect(view.calls).toHaveLength(0);
+  }
+  const duplicate = await sourceNatFixture("210987654321", true);
+  expect(duplicate.target.querySelector("fieldset[data-nat-reference]")).toBeNull();
+  expect(duplicate.target.textContent).toContain("uniquely bound");
+});
 it("source retirement including change-only and ABA restores controls and fences old settlement from a newer request", async () => {
   for (const change of ["input", "change", "network", "ABA"])
     for (const rejected of [false, true]) {
