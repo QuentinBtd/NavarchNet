@@ -2,7 +2,13 @@
 
 NavarchNet has an implemented fake-provider journey and a locally exercised AWS read-only account/topology slice, not a completed AWS V1 orchestrator. No live AWS API call/resource mutation, release/tag publication, crates.io upload or GHCR upload has occurred.
 
-## Current continuation — cross-account saved-reference acceptance
+## Current continuation — shared literal NAT-record correlation
+
+The existing point NAT inspector now consumes a crate-only correlation helper that returns the unique original resource index and descriptive owner/VPC comparisons, or the original unresolved reason. It reuses the original VPC decision from the same immutable capture instead of recomputing routing or copying NAT evidence inside correlation. The public point result still contains its complete original VPC decision and one owned original NAT record; all public models/JSON/TypeScript, completeness/region/error precedence and uniqueness across every resource kind are unchanged. Failed/unknown NAT metadata is not filtered into guessed health.
+
+Missing-helper/type compilation RED preceded GREEN; this is interface RED, not a historical runtime product defect. One new pure test checks original indexes after row reordering, duplicate kinds, missing records, scopes, failed metadata, precedence and an explicit public JSON oracle; all five older NAT tests remain. Scoped strict Clippy, all 109 library tests, 11 actual PostgreSQL/API fixtures and generated-contract comparison pass. A transient common-build-lock refusal admitted no test process; read-only ownership inspection showed release before one successful ordered-lock admission. Exact-source review/full installed hooks/remote readback remain pending. This is a working shared prerequisite, not an implemented NAT CIDR analyzer, new endpoint/UI, ownership/health/traffic-AZ/path claim, external-effect confirmation or live AWS/production/full-mission acceptance.
+
+## Reviewed checkpoint — cross-account saved-reference acceptance
 
 A test-only extension closes the positive cross-account saved-reference fixture gap without changing production code, API/permissions, typed contracts, UI or dependencies. Every original source point/CIDR/refresh/audit assertion completes before a new immutable network generation adds an explicitly network-owned egress attachment, two AZ-ID/subnet records, an implicit main table and a second explicit table. Independent source/network times remain 8/9. Three source cells and five target cells intersect into six joint cells; all eight addresses of the tiny IPv4 range match both unchanged point interpreters and their referenced parent ranges. Both target-subnet outcomes survive even when the source has a TGW blackhole or a non-TGW route.
 

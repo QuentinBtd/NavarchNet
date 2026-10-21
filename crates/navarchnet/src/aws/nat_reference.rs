@@ -48,59 +48,93 @@ fn scope(observed: Option<&str>, expected: Option<&str>) -> NatReferenceScope {
 }
 pub fn lookup(topology: &AwsTopology, subnet_id: &str, destination: &str) -> NatReferenceLookup {
     let subnet_lookup = vpc_lookup::lookup(topology, subnet_id, destination);
-    let evaluate = || -> NatReferenceResult {
-        if !topology.complete_for_supported_queries {
-            return NatReferenceResult::Unresolved {
-                reason: NatReferenceReason::IncompleteObservation,
-            };
-        }
-        if super::validate_region(&topology.region).is_err() {
-            return NatReferenceResult::Unresolved {
-                reason: NatReferenceReason::UnsupportedRegion,
-            };
-        }
-        let VpcSubnetLookupResult::Reported {
-            lookup:
-                VpcLookupResult::ReportedRoute {
-                    target: VpcRouteTarget::NatGateway { id },
-                    ..
-                },
-            ..
-        } = &subnet_lookup
-        else {
-            return NatReferenceResult::Unresolved {
-                reason: NatReferenceReason::NoReportedNatReference,
-            };
-        };
-        let mut records = topology.resources.iter().filter(|row| row.id == *id);
-        let Some(resource) = records.next() else {
-            return NatReferenceResult::Unresolved {
-                reason: NatReferenceReason::MissingOrAmbiguousRecord,
-            };
-        };
-        if records.next().is_some() || resource.kind != ResourceKind::NatGateway {
-            return NatReferenceResult::Unresolved {
-                reason: NatReferenceReason::MissingOrAmbiguousRecord,
-            };
-        }
-        let vpc = topology
-            .resources
-            .iter()
-            .find(|row| row.kind == ResourceKind::Subnet && row.id == subnet_id)
-            .and_then(|row| row.vpc_id.as_deref());
-        NatReferenceResult::ReportedRecord {
-            owner_scope: scope(
-                resource.owner_account_id.as_deref(),
-                Some(&topology.aws_account_id),
-            ),
-            vpc_scope: scope(resource.vpc_id.as_deref(), vpc),
-            resource: Box::new(resource.clone()),
-        }
+    let reference = match correlate(topology, subnet_id, &subnet_lookup) {
+        NatRecordReference::ReportedRecord {
+            resource_index,
+            owner_scope,
+            vpc_scope,
+        } => NatReferenceResult::ReportedRecord {
+            resource: Box::new(topology.resources[resource_index].clone()),
+            owner_scope,
+            vpc_scope,
+        },
+        NatRecordReference::Unresolved { reason } => NatReferenceResult::Unresolved { reason },
     };
-    let reference = evaluate();
     NatReferenceLookup {
         subnet_lookup,
         reference,
+    }
+}
+
+/// Internal correlation only: indexes refer to the exact supplied, immutable topology.
+/// The caller must supply the original VPC decision for this subnet from that same capture.
+/// No independent routing decision, serialized contract, authority or health claim is added.
+#[derive(Debug)]
+pub(crate) enum NatRecordReference {
+    ReportedRecord {
+        resource_index: usize,
+        owner_scope: NatReferenceScope,
+        vpc_scope: NatReferenceScope,
+    },
+    Unresolved {
+        reason: NatReferenceReason,
+    },
+}
+pub(crate) fn correlate(
+    topology: &AwsTopology,
+    subnet_id: &str,
+    subnet_lookup: &VpcSubnetLookupResult,
+) -> NatRecordReference {
+    if !topology.complete_for_supported_queries {
+        return NatRecordReference::Unresolved {
+            reason: NatReferenceReason::IncompleteObservation,
+        };
+    }
+    if super::validate_region(&topology.region).is_err() {
+        return NatRecordReference::Unresolved {
+            reason: NatReferenceReason::UnsupportedRegion,
+        };
+    }
+    let VpcSubnetLookupResult::Reported {
+        lookup:
+            VpcLookupResult::ReportedRoute {
+                target: VpcRouteTarget::NatGateway { id },
+                ..
+            },
+        ..
+    } = subnet_lookup
+    else {
+        return NatRecordReference::Unresolved {
+            reason: NatReferenceReason::NoReportedNatReference,
+        };
+    };
+    let mut records = topology
+        .resources
+        .iter()
+        .enumerate()
+        .filter(|(_, row)| row.id == *id);
+    let Some((resource_index, resource)) = records.next() else {
+        return NatRecordReference::Unresolved {
+            reason: NatReferenceReason::MissingOrAmbiguousRecord,
+        };
+    };
+    if records.next().is_some() || resource.kind != ResourceKind::NatGateway {
+        return NatRecordReference::Unresolved {
+            reason: NatReferenceReason::MissingOrAmbiguousRecord,
+        };
+    }
+    let vpc = topology
+        .resources
+        .iter()
+        .find(|row| row.kind == ResourceKind::Subnet && row.id == subnet_id)
+        .and_then(|row| row.vpc_id.as_deref());
+    NatRecordReference::ReportedRecord {
+        resource_index,
+        owner_scope: scope(
+            resource.owner_account_id.as_deref(),
+            Some(&topology.aws_account_id),
+        ),
+        vpc_scope: scope(resource.vpc_id.as_deref(), vpc),
     }
 }
 
@@ -150,6 +184,97 @@ mod tests {
             execution_enabled: false,
             connectivity_tested: false,
         }
+    }
+    #[test]
+    fn shared_record_index_keeps_literal_identity_scope_and_original_precedence() {
+        let topology = fixture();
+        let inspect = |capture: &AwsTopology, subnet: &str| {
+            let decision = vpc_lookup::lookup(capture, subnet, "203.0.113.1");
+            correlate(capture, subnet, &decision)
+        };
+        assert!(matches!(
+            inspect(&topology, "subnet-source"),
+            NatRecordReference::ReportedRecord {
+                resource_index: 3,
+                owner_scope: NatReferenceScope::NotReported,
+                vpc_scope: NatReferenceScope::NotReported
+            }
+        ));
+        assert_eq!(
+            serde_json::to_value(lookup(&topology, "subnet-source", "203.0.113.1").reference)
+                .unwrap(),
+            serde_json::json!({"status":"reported_record","resource":topology.resources[3],"owner_scope":"not_reported","vpc_scope":"not_reported"})
+        );
+        for kind in [
+            ResourceKind::NatGateway,
+            ResourceKind::Vpc,
+            ResourceKind::Subnet,
+            ResourceKind::RouteTable,
+            ResourceKind::TransitGateway,
+        ] {
+            let mut duplicate = fixture();
+            let mut row = duplicate.resources[3].clone();
+            row.kind = kind;
+            duplicate.resources.push(row);
+            assert!(matches!(
+                inspect(&duplicate, "subnet-source"),
+                NatRecordReference::Unresolved {
+                    reason: NatReferenceReason::MissingOrAmbiguousRecord
+                }
+            ));
+        }
+        let mut reordered = fixture();
+        reordered.resources.swap(0, 3);
+        assert!(matches!(
+            inspect(&reordered, "subnet-source"),
+            NatRecordReference::ReportedRecord {
+                resource_index: 0,
+                ..
+            }
+        ));
+        let mut scoped = fixture();
+        scoped.resources[3].owner_account_id = Some("999999999999".into());
+        scoped.resources[3].vpc_id = Some("vpc-other".into());
+        scoped.resources[3].state = Some("failed".into());
+        assert!(matches!(
+            inspect(&scoped, "subnet-source"),
+            NatRecordReference::ReportedRecord {
+                resource_index: 3,
+                owner_scope: NatReferenceScope::ReportedDifferent,
+                vpc_scope: NatReferenceScope::ReportedDifferent
+            }
+        ));
+        let mut absent = fixture();
+        absent.resources.pop();
+        assert!(matches!(
+            inspect(&absent, "subnet-source"),
+            NatRecordReference::Unresolved {
+                reason: NatReferenceReason::MissingOrAmbiguousRecord
+            }
+        ));
+        assert!(matches!(
+            inspect(&topology, "missing"),
+            NatRecordReference::Unresolved {
+                reason: NatReferenceReason::NoReportedNatReference
+            }
+        ));
+        let mut incomplete = fixture();
+        incomplete.complete_for_supported_queries = false;
+        incomplete.region = "unsupported".into();
+        assert!(matches!(
+            inspect(&incomplete, "missing"),
+            NatRecordReference::Unresolved {
+                reason: NatReferenceReason::IncompleteObservation
+            }
+        ));
+        let mut unsupported = fixture();
+        unsupported.region = "unsupported".into();
+        assert!(matches!(
+            inspect(&unsupported, "missing"),
+            NatRecordReference::Unresolved {
+                reason: NatReferenceReason::UnsupportedRegion
+            }
+        ));
     }
     #[test]
     fn a_nat_reference_requires_one_exact_record_identity_across_all_kinds() {
