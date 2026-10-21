@@ -51,6 +51,65 @@ async fn finish(store: &Store) -> anyhow::Result<()> {
 }
 
 #[tokio::test]
+async fn drift_detection_matches_simulated_resource_keys_not_only_bodies() -> anyhow::Result<()> {
+    for add_alias in [false, true] {
+        let store = isolated().await?;
+        let request = setup(&store).await?;
+        let plan = store.create_plan("admin", request).await?;
+        let op = store.apply("admin", &plan.id, Fault::None).await?;
+        finish(&store).await?;
+        assert_eq!(store.operation(&op.id).await?.status, "succeeded");
+        assert!(!store.observe(&op.id).await?.drift);
+        let (key, body): (String, serde_json::Value) = sqlx::query_as(
+            "SELECT action_key,body FROM fake_effects WHERE scope=$1 ORDER BY action_key LIMIT 1",
+        )
+        .bind(&plan.scope)
+        .fetch_one(&store.pool)
+        .await?;
+        let replacement = format!("unexpected:{}", uuid::Uuid::new_v4());
+        let change = if add_alias {
+            "INSERT INTO fake_effects(scope,action_key,body,operation_id,fence) SELECT scope,$1,body,operation_id,fence FROM fake_effects WHERE scope=$2 AND action_key=$3"
+        } else {
+            "UPDATE fake_effects SET action_key=$1 WHERE scope=$2 AND action_key=$3"
+        };
+        let changed = sqlx::query(change)
+            .bind(&replacement)
+            .bind(&plan.scope)
+            .bind(&key)
+            .execute(&store.pool)
+            .await?;
+        assert_eq!(changed.rows_affected(), 1);
+        let preserved: serde_json::Value =
+            sqlx::query_scalar("SELECT body FROM fake_effects WHERE scope=$1 AND action_key=$2")
+                .bind(&plan.scope)
+                .bind(&replacement)
+                .fetch_one(&store.pool)
+                .await?;
+        assert_eq!(
+            body, preserved,
+            "Only simulated resource identity changed, not its expected JSON"
+        );
+        let fingerprint = || async {
+            sqlx::query_scalar::<_, serde_json::Value>("SELECT jsonb_build_object('effects',(SELECT jsonb_agg(to_jsonb(e) ORDER BY scope,action_key) FROM fake_effects e),'operations',(SELECT jsonb_agg(to_jsonb(o) ORDER BY id) FROM operations o),'events',(SELECT jsonb_agg(to_jsonb(s) ORDER BY id) FROM step_events s),'audit',(SELECT jsonb_agg(to_jsonb(a) ORDER BY id) FROM audit a))")
+            .fetch_one(&store.pool).await
+        };
+        let before = fingerprint().await?;
+        let observation = store.observe(&op.id).await?;
+        assert!(
+            observation.drift,
+            "A matching effect body under the wrong resource key must not prove simulated convergence"
+        );
+        assert_eq!(observation.configuration, "drift");
+        assert_eq!(
+            before,
+            fingerprint().await?,
+            "Observation reports identity drift without repairing effects or changing operations/events/audit"
+        );
+    }
+    Ok(())
+}
+
+#[tokio::test]
 async fn changed_connection_intent_is_rejected_until_safe_migration_is_supported()
 -> anyhow::Result<()> {
     let store = isolated().await?;

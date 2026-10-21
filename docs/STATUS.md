@@ -2,13 +2,19 @@
 
 NavarchNet has an implemented fake-provider journey and a locally exercised AWS read-only account/topology slice, not a completed AWS V1 orchestrator. No live AWS API call/resource mutation, release/tag publication, crates.io upload or GHCR upload has occurred.
 
-## Current continuation — cross-account source/target/NAT reference acceptance
+## Current continuation — key-aware simulated configuration drift
+
+A real PostgreSQL regression reproduced false `simulated_converged` reporting when a simulated resource kept its expected JSON but its canonical action key changed. Observation previously discarded keys. It now compares both the executor's existing `kind:target` key and complete effect body, for missing completed effects and unexpected rows. Normal exact-key idempotent effects remain accepted; no operation/executor, API/model, permission or UI changes are introduced.
+
+The regression covers both a renamed key and an additional unexpected alias retaining the correct body, in separate fresh isolated fixtures. Complete fake-effect, operation, step-event and audit row fingerprints bracket observation after fixture perturbation: diagnosis reports drift without repairs or writes. Actual RED then GREEN, strict all-target Clippy and eight PostgreSQL/API cases pass. Independent source approval and installed full hooks/readbacks remain pending for this fix. This is fake configuration reporting, not AWS health/authority, an external-effect recovery confirmation or active connectivity evidence.
+
+## Delivered checkpoint — cross-account source/target/NAT reference acceptance
 
 A test-only extension of the existing cross-account PostgreSQL journey finishes every original assertion before preparing three additional immutable network captures (times 10/11/12, source still 8). Both declared target subnets are explicitly inspected through the unchanged NAT CIDR library and real protected network-account GET, preserving the same complete typed network capture as both source/target children. Every address of the tiny eight-address range agrees with the unchanged target/NAT point interpreters and original segment/record indexes. The second subnet's blackholes remain visible both with and without a source-reference match.
 
 The captures retain failed NAT/address metadata, then unknown state/unreported addresses and foreign descriptive owner scope, then an exact duplicate identity in another resource kind. None becomes healthy/owned/usable because a reference matches. Original source/target diagnostics survive ambiguity; a newer NAT capture differs from the previous parent's complete provenance even when registration and route literals remain equal. This demonstrates why independent latest replies cannot be combined on route equality alone, not a new production concurrency/simultaneity guard or joined-path API. Complete raw test-schema tables/catalog fingerprints remain unchanged after fixture preparation across bounded reads, analysis and all six NAT GETs.
 
-This is GREEN acceptance of existing behavior, not a manufactured product defect/RED or another test function. Fresh scoped strict all-target Clippy and all 11 AWS PostgreSQL/API tests pass; no production code, endpoint, UI/TS model, permission, provider, dependency or migration changes. Independent exact-source review and normal installed hooks/readbacks remain pending. No NAT health/authority/traffic-AZ/used-egress/return/full-path/live AWS, new feature browser/Docker/production/full-mission acceptance or external-effect confirmation is claimed.
+This is GREEN acceptance of existing behavior, not a manufactured product defect/RED or another test function. Fresh scoped strict all-target Clippy and all 11 AWS PostgreSQL/API tests pass; no production code, endpoint, UI/TS model, permission, provider, dependency or migration changes. Exact three-path/891-pin source approval, normal installed fast/full hooks and remote/OPEN-DRAFT/source/runtime readbacks completed in b9ca527; full counts remain 187 Rust / 184 frontend / 14 Chromium, with no additional test function. No NAT health/authority/traffic-AZ/used-egress/return/full-path/live AWS, new feature browser/Docker/production/full-mission acceptance or external-effect confirmation is claimed.
 
 ## Delivered checkpoint — protected saved NAT-record CIDR reader
 

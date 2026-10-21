@@ -321,20 +321,21 @@ impl Store {
     pub async fn observe(&self, operation_id: &str) -> anyhow::Result<Observation> {
         let op = self.operation(operation_id).await?;
         let plan = self.plan(&op.plan_id).await?;
-        let effects: Vec<Value> =
-            sqlx::query_scalar("SELECT body FROM fake_effects WHERE scope=$1")
+        let effects: Vec<(String, Value)> =
+            sqlx::query_as("SELECT action_key,body FROM fake_effects WHERE scope=$1")
                 .bind(&op.scope)
                 .fetch_all(&self.pool)
                 .await?;
         let drift = plan.actions.iter().take(op.step as usize).any(|a| {
-            !effects
-                .iter()
-                .any(|e| *e == encode(&a.effect()).unwrap_or(Value::Null))
-        }) || effects.iter().any(|effect| {
-            !plan
-                .actions
-                .iter()
-                .any(|a| encode(&a.effect()).is_ok_and(|expected| *effect == expected))
+            !effects.iter().any(|(key, body)| {
+                *key == format!("{:?}:{}", a.kind, a.target)
+                    && *body == encode(&a.effect()).unwrap_or(Value::Null)
+            })
+        }) || effects.iter().any(|(key, effect)| {
+            !plan.actions.iter().any(|a| {
+                *key == format!("{:?}:{}", a.kind, a.target)
+                    && encode(&a.effect()).is_ok_and(|expected| *effect == expected)
+            })
         });
         let network: RegionalNetwork = decode(
             sqlx::query_scalar("SELECT body FROM networks WHERE id=$1")
