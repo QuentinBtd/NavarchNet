@@ -548,6 +548,43 @@ async fn target_attachment_cidr_saved_capture_retains_all_declared_subnets() -> 
             }
         );
     }
+    // A source in this same account reports a local route, not a TGW handoff. Composition
+    // must retain both original captures/target outcomes without inventing a forward path.
+    use navarchnet::aws::source_target_cidr_reference::{
+        self, SourceTargetCidrBudget, SourceTargetCidrQuery,
+    };
+    let source = store
+        .aws_saved_observation_bounded(&account.id, SavedObservationReadBudget::default())
+        .await?;
+    let network = store
+        .aws_saved_observation_bounded(&account.id, SavedObservationReadBudget::default())
+        .await?;
+    let joint = source_target_cidr_reference::analyze(
+        source,
+        network,
+        SourceTargetCidrQuery {
+            source_account_id: account.id.clone(),
+            network_account_id: account.id.clone(),
+            subnet_id: "subnet-a".into(),
+            transit_gateway_id: "tgw-target".into(),
+            target_attachment_id: "tgw-attach-target".into(),
+            destination_cidr: "203.0.113.0/29".into(),
+        },
+        SourceTargetCidrBudget::default(),
+    )?;
+    assert_eq!(
+        serde_json::to_value(&joint.target)?,
+        serde_json::to_value(&result)?
+    );
+    assert_eq!(
+        serde_json::to_value(&joint.source.network_saved)?,
+        serde_json::to_value(&joint.target.network_saved)?
+    );
+    assert!(joint.reference_only && joint.partition_complete);
+    assert!(
+        !joint.execution_enabled && !joint.connectivity_tested && !joint.simultaneous_snapshots
+    );
+    assert!(joint.segments.iter().all(|c| !c.selected_reference_matches));
     assert_eq!(
         before,
         fingerprint().await?,

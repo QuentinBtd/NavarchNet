@@ -15,6 +15,9 @@ pub mod service;
 pub mod session;
 pub mod source_handoff;
 pub mod source_handoff_cidr_coverage;
+pub mod source_target_cidr_reference;
+#[cfg(test)]
+mod source_target_cidr_reference_tests;
 pub mod target_attachment_cidr_coverage;
 pub mod target_lookup;
 pub mod tgw_cidr_coverage;
