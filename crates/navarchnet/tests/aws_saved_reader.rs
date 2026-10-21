@@ -121,6 +121,37 @@ async fn latest_saved_reads_are_independent_of_attempts_and_auxiliary_records() 
         serde_json::to_value(checked(&store, &account.id, budget).await?)?,
         expected
     );
+    // The protected reader must return exactly the already counted library envelope.
+    use axum::{
+        body::{Body, to_bytes},
+        http::{Request, StatusCode},
+    };
+    use navarchnet::{
+        api::{self, AppState},
+        auth::Auth,
+    };
+    use std::sync::Arc;
+    use tower::ServiceExt;
+    let app = api::router(AppState {
+        store: store.clone(),
+        auth: Arc::new(Auth::demo("a".repeat(32), "r".repeat(32))?),
+        aws: None,
+    });
+    let response = app.oneshot(Request::builder()
+        .uri(format!("/api/v1/aws/accounts/{}/nat-cidr-reference?subnet_id=subnet-not-present&destination_cidr=192.0.2.0%2F29", account.id))
+        .header("authorization", format!("Bearer {}", "r".repeat(32)))
+        .body(Body::empty())?).await?;
+    assert_eq!(response.status(), StatusCode::OK);
+    assert_eq!(
+        to_bytes(response.into_body(), 4 * 1024 * 1024)
+            .await?
+            .as_ref(),
+        serde_json::to_vec(&result)?
+    );
+    assert_eq!(
+        serde_json::to_value(checked(&store, &account.id, budget).await?)?,
+        expected
+    );
     Ok(())
 }
 #[tokio::test]

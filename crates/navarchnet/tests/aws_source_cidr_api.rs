@@ -1,3 +1,5 @@
+#[path = "support/nat_cidr_reference_cases.rs"]
+mod nat_reference_cases;
 #[path = "support/source_target_reference_cases.rs"]
 mod reference_cases;
 mod support;

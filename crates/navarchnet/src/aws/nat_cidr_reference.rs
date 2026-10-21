@@ -225,14 +225,7 @@ thread_local! {
     pub(super) static RESERVED_CLONES: std::cell::Cell<usize> = const { std::cell::Cell::new(0) };
     pub(super) static RESERVED_RESPONSE: std::cell::Cell<usize> = const { std::cell::Cell::new(0) };
 }
-/// Uniformity follows from the unchanged child's complete VPC decision partition. Correlation has
-/// no destination predicate: fixed capture/subnet/completeness/region plus an unchanged VPC result
-/// fixes literal record identity and scopes. No new witnesses, pruning, coalescing or NAT state rule.
-pub fn analyze(
-    saved: SavedObservation,
-    query: NatCidrReferenceQuery,
-    b: NatCidrReferenceBudget,
-) -> Result<NatCidrReferenceCoverage> {
+pub(crate) fn validate_query(query: &NatCidrReferenceQuery) -> Result<()> {
     if query.account_id.is_empty()
         || query.account_id.len() > 2048
         || query.account_id.chars().any(char::is_control)
@@ -243,6 +236,17 @@ pub fn analyze(
         .into());
     }
     vpc_cidr_coverage::validate_query(&query.subnet_id, &query.destination_cidr)?;
+    Ok(())
+}
+/// Uniformity follows from the unchanged child's complete VPC decision partition. Correlation has
+/// no destination predicate: fixed capture/subnet/completeness/region plus an unchanged VPC result
+/// fixes literal record identity and scopes. No new witnesses, pruning, coalescing or NAT state rule.
+pub fn analyze(
+    saved: SavedObservation,
+    query: NatCidrReferenceQuery,
+    b: NatCidrReferenceBudget,
+) -> Result<NatCidrReferenceCoverage> {
+    validate_query(&query)?;
     check(saved.topology.resources.len(), b.resources, "resources")?;
     check(b.vpc.segments, b.segments, "segments")?;
     let mut census = Census {

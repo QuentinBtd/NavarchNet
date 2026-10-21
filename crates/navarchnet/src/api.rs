@@ -20,6 +20,7 @@ use serde::{Deserialize, Serialize};
 use std::sync::Arc;
 use tower_http::{services::ServeDir, set_header::SetResponseHeaderLayer};
 use ts_rs::TS;
+mod nat_cidr;
 mod source_cidr;
 mod source_target_cidr;
 mod target_cidr;
@@ -273,6 +274,10 @@ pub fn router(state: AppState) -> Router {
         .route(
             "/aws/accounts/{id}/tgw-source-target-cidr-reference",
             get(source_target_cidr::reference),
+        )
+        .route(
+            "/aws/accounts/{id}/nat-cidr-reference",
+            get(nat_cidr::reference),
         )
         .route("/networks", post(create_network))
         .route("/plans", post(create_plan))
