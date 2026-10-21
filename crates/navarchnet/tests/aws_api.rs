@@ -1973,6 +1973,271 @@ async fn saved_source_handoff_binds_two_account_snapshots_and_az_without_writes(
             .fetch_one(&store.pool)
             .await?
     );
+    // Additional acceptance of the already implemented reference GET. All original
+    // assertions above finish before a new immutable network generation is prepared.
+    let mut egress_vpc = owned(
+        ResourceKind::Vpc,
+        "vpc-egress",
+        &network_account.aws_account_id,
+    );
+    egress_vpc.cidrs = vec!["10.2.0.0/16".into()];
+    let mut egress_attachment = owned(
+        ResourceKind::VpcAttachment,
+        "tgw-attach-egress",
+        &network_account.aws_account_id,
+    );
+    egress_attachment.vpc_id = Some(egress_vpc.id.clone());
+    egress_attachment.related_ids = vec![
+        "tgw-handoff".into(),
+        "subnet-egress-b".into(),
+        "subnet-egress-a".into(),
+    ];
+    let mut egress_a = owned(
+        ResourceKind::Subnet,
+        "subnet-egress-a",
+        &network_account.aws_account_id,
+    );
+    egress_a.vpc_id = Some(egress_vpc.id.clone());
+    egress_a.az_id = Some("euw1-az1".into());
+    egress_a.cidrs = vec!["10.2.1.0/24".into()];
+    let mut egress_b = egress_a.clone();
+    egress_b.id = "subnet-egress-b".into();
+    egress_b.az_id = Some("euw1-az2".into());
+    egress_b.cidrs = vec!["10.2.2.0/24".into()];
+    let mut egress_main = owned(
+        ResourceKind::RouteTable,
+        "rtb-egress-main",
+        &network_account.aws_account_id,
+    );
+    egress_main.vpc_id = Some(egress_vpc.id.clone());
+    egress_main.associations = vec![RouteAssociation {
+        id: Some("assoc-egress-main".into()),
+        main: true,
+        subnet_id: None,
+        gateway_id: None,
+        state: Some("associated".into()),
+    }];
+    egress_main.routes = vec![ObservedRoute {
+        ipv4_destination: Some("0.0.0.0/0".into()),
+        ipv6_destination: None,
+        prefix_list_destination: None,
+        state: Some("active".into()),
+        origin: Some("CreateRoute".into()),
+        targets: [("natGatewayId".into(), "nat-unknown-literal".into())].into(),
+    }];
+    let mut egress_second = egress_main.clone();
+    egress_second.id = "rtb-egress-b".into();
+    egress_second.associations[0].id = Some("assoc-egress-b".into());
+    egress_second.associations[0].main = false;
+    egress_second.associations[0].subnet_id = Some(egress_b.id.clone());
+    for destination in ["203.0.113.1/32", "203.0.113.5/32"] {
+        let mut blackhole = egress_second.routes[0].clone();
+        blackhole.ipv4_destination = Some(destination.into());
+        blackhole.state = Some("blackhole".into());
+        blackhole.targets.clear();
+        egress_second.routes.push(blackhole);
+    }
+    let mut resources = network.resources.clone();
+    resources.extend([
+        egress_vpc,
+        egress_attachment,
+        egress_b,
+        egress_main,
+        egress_a,
+        egress_second,
+    ]);
+    let extended_network = snapshot(&network_account, resources, "9");
+    let (_, _, generation) = store
+        .begin_aws_discovery("fixture", &network_account.id)
+        .await?;
+    store
+        .finish_aws_discovery("fixture", generation, &extended_network)
+        .await?;
+    let fingerprint = || async {
+        let tables = sqlx::query_scalar::<_, String>(
+            "SELECT tablename FROM pg_tables WHERE schemaname=current_schema() ORDER BY tablename",
+        )
+        .fetch_all(&store.pool)
+        .await?;
+        let mut state = serde_json::Map::new();
+        for table in tables {
+            let quoted = table.replace('"', "\"\"");
+            let sql = format!(
+                "SELECT COALESCE(jsonb_agg(to_jsonb(t) ORDER BY to_jsonb(t)::text),'[]'::jsonb) FROM \"{quoted}\" t"
+            );
+            let rows = sqlx::query_scalar::<_, Value>(sqlx::AssertSqlSafe(sql))
+                .fetch_one(&store.pool)
+                .await?;
+            state.insert(table, rows);
+        }
+        let catalog=sqlx::query_scalar::<_,Value>(r#"SELECT jsonb_build_object(
+            'relations',(SELECT jsonb_agg(to_jsonb(c) ORDER BY oid) FROM pg_class c WHERE relnamespace=current_schema()::regnamespace),
+            'columns',(SELECT jsonb_agg(to_jsonb(a) ORDER BY attrelid,attnum) FROM pg_attribute a WHERE attrelid IN (SELECT oid FROM pg_class WHERE relnamespace=current_schema()::regnamespace)),
+            'constraints',(SELECT jsonb_agg(to_jsonb(c) ORDER BY oid) FROM pg_constraint c WHERE connamespace=current_schema()::regnamespace),
+            'indexes',(SELECT jsonb_agg(to_jsonb(i) ORDER BY indexrelid) FROM pg_index i WHERE indrelid IN (SELECT oid FROM pg_class WHERE relnamespace=current_schema()::regnamespace)),
+            'triggers',(SELECT jsonb_agg(to_jsonb(t) ORDER BY oid) FROM pg_trigger t WHERE tgrelid IN (SELECT oid FROM pg_class WHERE relnamespace=current_schema()::regnamespace)),
+            'functions',(SELECT jsonb_agg(to_jsonb(p) ORDER BY oid) FROM pg_proc p WHERE pronamespace=current_schema()::regnamespace),
+            'sequences',(SELECT jsonb_agg(to_jsonb(s) ORDER BY sequencename) FROM pg_sequences s WHERE schemaname=current_schema()))"#).fetch_one(&store.pool).await?;
+        state.insert("catalog".into(), catalog);
+        Ok::<Value, anyhow::Error>(Value::Object(state))
+    };
+    let raw_before = fingerprint().await?;
+    use navarchnet::aws::{
+        source_target_cidr_reference::{self, SourceTargetCidrBudget, SourceTargetCidrQuery},
+        target_lookup::{self, TargetAzSelection, TargetVpcLookup},
+    };
+    let budget = SavedObservationReadBudget::default();
+    let source_capture = store
+        .aws_saved_observation_bounded(&source_account.id, budget)
+        .await?;
+    let network_capture = store
+        .aws_saved_observation_bounded(
+            &network_account.id,
+            SavedObservationReadBudget {
+                total_bytes: budget
+                    .total_bytes
+                    .checked_sub(source_capture.admitted_bytes)
+                    .unwrap(),
+                ..budget
+            },
+        )
+        .await?;
+    let joint = source_target_cidr_reference::analyze(
+        source_capture,
+        network_capture,
+        SourceTargetCidrQuery {
+            source_account_id: source_account.id.clone(),
+            network_account_id: network_account.id.clone(),
+            subnet_id: "subnet-source".into(),
+            transit_gateway_id: "tgw-handoff".into(),
+            target_attachment_id: "tgw-attach-egress".into(),
+            destination_cidr: "203.0.113.0/29".into(),
+        },
+        SourceTargetCidrBudget::default(),
+    )?;
+    assert_eq!(joint.source.source_saved.saved_row_id, refreshed.id);
+    assert_eq!(joint.target.network_saved.saved_row_id, extended_network.id);
+    assert_eq!(joint.source.source_saved.topology.completed_at, "8");
+    assert_eq!(joint.target.network_saved.topology.completed_at, "9");
+    assert_eq!(joint.source.source_saved.registration.id, source_account.id);
+    assert_eq!(
+        joint.target.network_saved.registration.id,
+        network_account.id
+    );
+    assert_ne!(source_account.id, network_account.id);
+    assert_eq!(
+        serde_json::to_value(&joint.source.network_saved)?,
+        serde_json::to_value(&joint.target.network_saved)?
+    );
+    assert_eq!(joint.target.az_selection, TargetAzSelection::NotInferred);
+    assert!(joint.reference_only && joint.partition_complete);
+    assert!(
+        !joint.execution_enabled && !joint.connectivity_tested && !joint.simultaneous_snapshots
+    );
+    assert_eq!(
+        (
+            joint.source.segments.len(),
+            joint.target.segments.len(),
+            joint.segments.len()
+        ),
+        (3, 5, 6)
+    );
+    for host in 0..8 {
+        let ip = format!("203.0.113.{host}");
+        let ordinal = u32::from(ip.parse::<std::net::Ipv4Addr>()?);
+        let cells: Vec<_> = joint
+            .segments
+            .iter()
+            .filter(|cell| {
+                u32::from(cell.start.parse::<std::net::Ipv4Addr>().unwrap()) <= ordinal
+                    && ordinal
+                        <= u32::from(cell.end_inclusive.parse::<std::net::Ipv4Addr>().unwrap())
+            })
+            .collect();
+        assert_eq!(cells.len(), 1);
+        let cell = cells[0];
+        let source_cell = &joint.source.segments[cell.source_segment_index];
+        let target_cell = &joint.target.segments[cell.target_segment_index];
+        for (start, end) in [
+            (&source_cell.start, &source_cell.end_inclusive),
+            (&target_cell.start, &target_cell.end_inclusive),
+        ] {
+            assert!(
+                u32::from(start.parse::<std::net::Ipv4Addr>()?)
+                    <= u32::from(cell.start.parse::<std::net::Ipv4Addr>()?)
+            );
+            assert!(
+                u32::from(cell.end_inclusive.parse::<std::net::Ipv4Addr>()?)
+                    <= u32::from(end.parse::<std::net::Ipv4Addr>()?)
+            );
+        }
+        assert_eq!(
+            source_cell.result,
+            navarchnet::aws::source_handoff::lookup(
+                &refreshed,
+                &extended_network,
+                "subnet-source",
+                &ip
+            )
+        );
+        assert_eq!(
+            target_cell.result,
+            target_lookup::lookup(&extended_network, "tgw-handoff", "tgw-attach-egress", &ip)
+        );
+        assert_eq!(cell.selected_reference_matches, host < 2);
+        let TargetVpcLookup::ReportedSubnets { subnets, .. } = &target_cell.result else {
+            panic!("both target entries required even without a source match")
+        };
+        assert_eq!(subnets.len(), 2);
+        assert_eq!(subnets[0].subnet_id, "subnet-egress-a");
+        assert_eq!(subnets[1].subnet_id, "subnet-egress-b");
+        let a = serde_json::to_value(&subnets[0])?;
+        let b = serde_json::to_value(&subnets[1])?;
+        assert_eq!(a["lookup"]["source"], "implicit_main");
+        assert_eq!(b["lookup"]["source"], "explicit_subnet");
+        assert_eq!(a["lookup"]["lookup"]["status"], "reported_route");
+        assert_eq!(
+            b["lookup"]["lookup"]["status"],
+            if host == 1 || host == 5 {
+                "reported_blackhole"
+            } else {
+                "reported_route"
+            }
+        );
+    }
+    // The request uses the real protected router; no mocked response or new production fixture API.
+    let query = form_urlencoded::Serializer::new(String::new())
+        .append_pair("network_account_id", &network_account.id)
+        .append_pair("subnet_id", "subnet-source")
+        .append_pair("transit_gateway_id", "tgw-handoff")
+        .append_pair("target_attachment_id", "tgw-attach-egress")
+        .append_pair("destination_cidr", "203.0.113.0/29")
+        .finish();
+    let response = app
+        .clone()
+        .oneshot(
+            Request::builder()
+                .uri(format!(
+                    "/api/v1/aws/accounts/{}/tgw-source-target-cidr-reference?{query}",
+                    source_account.id
+                ))
+                .header("authorization", format!("Bearer {reader}"))
+                .body(Body::empty())?,
+        )
+        .await?;
+    assert_eq!(response.status(), StatusCode::OK);
+    assert_eq!(response.headers()["cache-control"], "no-store");
+    let bytes = to_bytes(
+        response.into_body(),
+        SourceTargetCidrBudget::default().response_bytes,
+    )
+    .await?;
+    assert_eq!(bytes.as_ref(), serde_json::to_vec(&joint)?);
+    assert_eq!(
+        raw_before,
+        fingerprint().await?,
+        "complete raw tables/catalog remain unchanged by bounded reads, core and HTTP composition"
+    );
     Ok(())
 }
 #[tokio::test]

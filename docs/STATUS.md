@@ -2,7 +2,13 @@
 
 NavarchNet has an implemented fake-provider journey and a locally exercised AWS read-only account/topology slice, not a completed AWS V1 orchestrator. No live AWS API call/resource mutation, release/tag publication, crates.io upload or GHCR upload has occurred.
 
-## Current continuation — protected saved source/target reference reader
+## Current continuation — cross-account saved-reference acceptance
+
+A test-only extension closes the positive cross-account saved-reference fixture gap without changing production code, API/permissions, typed contracts, UI or dependencies. Every original source point/CIDR/refresh/audit assertion completes before a new immutable network generation adds an explicitly network-owned egress attachment, two AZ-ID/subnet records, an implicit main table and a second explicit table. Independent source/network times remain 8/9. Three source cells and five target cells intersect into six joint cells; all eight addresses of the tiny IPv4 range match both unchanged point interpreters and their referenced parent ranges. Both target-subnet outcomes survive even when the source has a TGW blackhole or a non-TGW route.
+
+At one address the exact selected gateway/attachment reference matches while the second target subnet reports a blackhole; at another that target blackhole remains visible without a source reference match. This explicitly separates reference equality from usability or traffic-AZ selection. The actual protected GET body equals compact core JSON byte-for-byte, and complete raw table/catalog fingerprints remain unchanged across reads, analysis and HTTP. This is GREEN acceptance coverage of existing functionality, not a new product defect/RED or proof of live AWS, health, NAT/return path or connectivity. Fresh scoped strict Clippy and 27 AWS/reader/source/target API checks pass; independent exact-source review and normal installed hooks/readbacks remain pending. No new feature browser or Docker qualification is claimed.
+
+## Reviewed checkpoint — protected saved source/target reference reader
 
 The existing library composer now has a thin reader/admin GET with five strict required query fields and a sole source-registration path. Authentication precedes extraction; shared literal/canonical validation precedes two SQL-gated saved reads with one checked aggregate remaining allowance. The original redacted mapper and trusted default analysis limits apply, and the counted core envelope returns directly. No private role/adoption/SDK read, new permission, frontend consumer or diagnostic form is added. Canonical spelling that both children already reject is now rejected at root validation, before database access or root reservations; saved route literals and point semantics are unchanged.
 
