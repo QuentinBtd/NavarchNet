@@ -1,5 +1,6 @@
 //! AWS role references and read-only observations. Never model discovery as ownership.
 mod attachment_subnets;
+mod cidr_partition;
 pub mod ec2;
 pub mod ingress_lookup;
 pub mod nat_reference;
@@ -8,11 +9,13 @@ pub mod persistence;
 pub mod ram;
 pub mod route_lookup;
 pub mod routing;
+mod saved_cidr_admission;
 pub mod saved_observation;
 pub mod service;
 pub mod session;
 pub mod source_handoff;
 pub mod source_handoff_cidr_coverage;
+pub mod target_attachment_cidr_coverage;
 pub mod target_lookup;
 pub mod tgw_cidr_coverage;
 pub mod vpc_cidr_coverage;

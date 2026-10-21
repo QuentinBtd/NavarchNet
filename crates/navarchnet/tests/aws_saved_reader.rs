@@ -346,3 +346,189 @@ async fn identity_schema_and_false_markers_are_required_without_repairing_eviden
     }
     Ok(())
 }
+
+#[tokio::test]
+async fn target_attachment_cidr_saved_capture_retains_all_declared_subnets() -> anyhow::Result<()> {
+    use navarchnet::aws::{
+        target_attachment_cidr_coverage::{
+            self, TargetAttachmentCidrBudget, TargetAttachmentCidrQuery,
+        },
+        target_lookup::{self, TargetAzSelection, TargetVpcLookup},
+    };
+    let (store, account, mut topology, _) = fixture().await?;
+    let (_, _, generation) = store.begin_aws_discovery("fixture", &account.id).await?;
+    topology.id = uuid::Uuid::new_v4().to_string();
+    topology.completed_at = "saved-target-generation".into();
+    let row = |kind, id: &str| {
+        let mut r = AwsResource::new(kind, id.into());
+        r.owner_account_id = Some(account.aws_account_id.clone());
+        r.state = Some("available".into());
+        r
+    };
+    let gateway = row(ResourceKind::TransitGateway, "tgw-target");
+    let mut attachment = row(ResourceKind::VpcAttachment, "tgw-attach-target");
+    attachment.vpc_id = Some("vpc-target".into());
+    attachment.related_ids = vec!["tgw-target".into(), "subnet-b".into(), "subnet-a".into()];
+    let mut vpc = row(ResourceKind::Vpc, "vpc-target");
+    vpc.cidrs = vec!["10.0.0.0/16".into()];
+    let mut a = row(ResourceKind::Subnet, "subnet-a");
+    a.vpc_id = Some(vpc.id.clone());
+    a.az_id = Some("euw1-az1".into());
+    a.cidrs = vec!["10.0.1.0/24".into()];
+    let mut b = a.clone();
+    b.id = "subnet-b".into();
+    b.az_id = Some("euw1-az2".into());
+    b.cidrs = vec!["10.0.2.0/24".into()];
+    let mut main = row(ResourceKind::RouteTable, "rtb-main");
+    main.vpc_id = Some(vpc.id.clone());
+    main.associations = vec![RouteAssociation {
+        id: Some("assoc-main".into()),
+        main: true,
+        subnet_id: None,
+        gateway_id: None,
+        state: Some("associated".into()),
+    }];
+    main.routes = vec![ObservedRoute {
+        ipv4_destination: Some("0.0.0.0/0".into()),
+        ipv6_destination: None,
+        prefix_list_destination: None,
+        state: Some("active".into()),
+        origin: Some("CreateRoute".into()),
+        targets: [("gatewayId".into(), "local".into())].into(),
+    }];
+    let mut second = main.clone();
+    second.id = "rtb-second".into();
+    second.associations[0].main = false;
+    second.associations[0].subnet_id = Some(b.id.clone());
+    second.associations[0].id = Some("assoc-second".into());
+    let mut hidden = main.routes[0].clone();
+    hidden.ipv4_destination = Some("203.0.113.3/32".into());
+    hidden.state = Some("blackhole".into());
+    hidden.targets.clear();
+    second.routes.push(hidden);
+    topology.resources = vec![gateway, attachment, vpc, b, main, a, second];
+    store
+        .finish_aws_discovery("fixture", generation, &topology)
+        .await?;
+    let (_, _, pending) = store.begin_aws_discovery("fixture", &account.id).await?;
+    assert!(pending > generation);
+    // The analysis reader must not need private or adoption decoding.
+    sqlx::query("UPDATE aws_accounts SET role_configuration='null'::jsonb WHERE id=$1")
+        .bind(&account.id)
+        .execute(&store.pool)
+        .await?;
+    sqlx::query("INSERT INTO aws_adoptions(id,account_id,resource_kind,resource_id,topology_id,body) VALUES($1,$2,'vpc','vpc-target',$3,'null'::jsonb)").bind(uuid::Uuid::new_v4().to_string()).bind(&account.id).bind(&topology.id).execute(&store.pool).await?;
+    let fingerprint = || async {
+        // Fingerprint every raw test-schema table, not merely record counts or selected columns.
+        let tables = sqlx::query_scalar::<_, String>(
+            "SELECT tablename FROM pg_tables WHERE schemaname=current_schema() ORDER BY tablename",
+        )
+        .fetch_all(&store.pool)
+        .await?;
+        let mut state = serde_json::Map::new();
+        for table in tables {
+            let quoted = table.replace('"', "\"\"");
+            let sql = format!(
+                "SELECT COALESCE(jsonb_agg(to_jsonb(t) ORDER BY to_jsonb(t)::text),'[]'::jsonb) FROM \"{quoted}\" t"
+            );
+            let rows = sqlx::query_scalar::<_, Value>(sqlx::AssertSqlSafe(sql))
+                .fetch_one(&store.pool)
+                .await?;
+            state.insert(table, rows);
+        }
+        let catalog=sqlx::query_scalar::<_,Value>(r#"SELECT jsonb_build_object(
+            'relations',(SELECT jsonb_agg(to_jsonb(c) ORDER BY oid) FROM pg_class c WHERE relnamespace=current_schema()::regnamespace),
+            'columns',(SELECT jsonb_agg(to_jsonb(a) ORDER BY attrelid,attnum) FROM pg_attribute a WHERE attrelid IN (SELECT oid FROM pg_class WHERE relnamespace=current_schema()::regnamespace)),
+            'constraints',(SELECT jsonb_agg(to_jsonb(c) ORDER BY oid) FROM pg_constraint c WHERE connamespace=current_schema()::regnamespace),
+            'indexes',(SELECT jsonb_agg(to_jsonb(i) ORDER BY indexrelid) FROM pg_index i WHERE indrelid IN (SELECT oid FROM pg_class WHERE relnamespace=current_schema()::regnamespace)),
+            'triggers',(SELECT jsonb_agg(to_jsonb(t) ORDER BY oid) FROM pg_trigger t WHERE tgrelid IN (SELECT oid FROM pg_class WHERE relnamespace=current_schema()::regnamespace)),
+            'functions',(SELECT jsonb_agg(to_jsonb(p) ORDER BY oid) FROM pg_proc p WHERE pronamespace=current_schema()::regnamespace),
+            'sequences',(SELECT jsonb_agg(to_jsonb(s) ORDER BY sequencename) FROM pg_sequences s WHERE schemaname=current_schema()))"#).fetch_one(&store.pool).await?;
+        state.insert("catalog".into(), catalog);
+        Ok::<Value, anyhow::Error>(Value::Object(state))
+    };
+    let before = fingerprint().await?;
+    let saved = store
+        .aws_saved_observation_bounded(&account.id, SavedObservationReadBudget::default())
+        .await?;
+    assert_eq!(saved.generation, generation);
+    assert_eq!(saved.saved_row_id, topology.id);
+    assert_eq!(saved.topology.completed_at, topology.completed_at);
+    let result = target_attachment_cidr_coverage::analyze(
+        saved,
+        TargetAttachmentCidrQuery {
+            network_account_id: account.id.clone(),
+            transit_gateway_id: "tgw-target".into(),
+            target_attachment_id: "tgw-attach-target".into(),
+            destination_cidr: "203.0.113.0/29".into(),
+        },
+        TargetAttachmentCidrBudget::default(),
+    )?;
+    assert_eq!(result.az_selection, TargetAzSelection::NotInferred);
+    assert!(result.reference_only && result.partition_complete);
+    assert!(!result.execution_enabled && !result.connectivity_tested);
+    assert_eq!(
+        serde_json::to_value(&result.network_saved.topology)?,
+        serde_json::to_value(&topology)?
+    );
+    assert_eq!(
+        serde_json::to_value(&result.network_saved.registration)?,
+        serde_json::to_value(&account)?
+    );
+    assert_eq!(result.network_saved.generation, generation);
+    assert_eq!(result.query.network_account_id, account.id);
+    assert!(
+        result
+            .origins
+            .iter()
+            .any(|o| serde_json::to_value(o).unwrap()["predicate"]["resource_index"] == 6)
+    );
+    assert_eq!(result.segments.len(), 3);
+    for octet in 0..8 {
+        let ip: std::net::IpAddr = format!("203.0.113.{octet}").parse()?;
+        let cells: Vec<_> = result
+            .segments
+            .iter()
+            .filter(|c| {
+                c.start.parse::<std::net::IpAddr>().unwrap() <= ip
+                    && ip <= c.end_inclusive.parse::<std::net::IpAddr>().unwrap()
+            })
+            .collect();
+        assert_eq!(cells.len(), 1);
+        assert_eq!(
+            cells[0].result,
+            target_lookup::lookup(
+                &topology,
+                "tgw-target",
+                "tgw-attach-target",
+                &ip.to_string()
+            )
+        );
+        let TargetVpcLookup::ReportedSubnets { subnets, .. } = &cells[0].result else {
+            panic!("all declared subnets required")
+        };
+        assert_eq!(subnets.len(), 2);
+        assert_eq!(subnets[0].subnet_id, "subnet-a");
+        assert_eq!(subnets[1].subnet_id, "subnet-b");
+        assert_eq!(
+            serde_json::to_value(&subnets[0])?["lookup"]["source"],
+            "implicit_main"
+        );
+        let body = serde_json::to_value(&subnets[1])?;
+        assert_eq!(body["lookup"]["source"], "explicit_subnet");
+        assert_eq!(
+            body["lookup"]["lookup"]["status"],
+            if octet == 3 {
+                "reported_blackhole"
+            } else {
+                "reported_route"
+            }
+        );
+    }
+    assert_eq!(
+        before,
+        fingerprint().await?,
+        "read and analysis preserve full raw state, fences, private/adoptions/audit and catalog"
+    );
+    Ok(())
+}

@@ -51,6 +51,8 @@ pub fn lookup(
     attachment_id: &str,
     destination: &str,
 ) -> TargetVpcLookup {
+    #[cfg(test)]
+    POINT_ENTRIES.with(|count| count.set(count.get() + 1));
     if !topology.complete_for_supported_queries {
         return TargetVpcLookup::Unresolved {
             reason: TgwTargetReason::IncompleteObservation,
@@ -157,7 +159,9 @@ pub fn lookup(
 }
 
 #[cfg(test)]
-mod tests {
+std::thread_local! { pub(crate) static POINT_ENTRIES: std::cell::Cell<usize> = const { std::cell::Cell::new(0) }; }
+#[cfg(test)]
+pub(crate) mod tests {
     use super::*;
     use crate::aws::observation::*;
     fn row(kind: ResourceKind, id: &str) -> AwsResource {
@@ -166,7 +170,7 @@ mod tests {
         value.state = Some("available".into());
         value
     }
-    fn fixture() -> AwsTopology {
+    pub(crate) fn fixture() -> AwsTopology {
         let gateway = row(ResourceKind::TransitGateway, "tgw-target");
         let mut attachment = row(ResourceKind::VpcAttachment, "tgw-attach-target");
         attachment.vpc_id = Some("vpc-target".into());

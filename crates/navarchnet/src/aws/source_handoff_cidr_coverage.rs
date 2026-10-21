@@ -3,12 +3,13 @@ use super::{
     observation::ResourceKind,
     saved_observation::SavedObservation,
     source_handoff::{self, SourceHandoffLookup},
-    vpc_cidr_coverage, vpc_lookup,
+    vpc_cidr_coverage,
 };
 use ipnet::IpNet;
 use serde::{Deserialize, Serialize};
-use std::net::{IpAddr, Ipv4Addr, Ipv6Addr};
 use ts_rs::TS;
+#[cfg(test)]
+use {super::vpc_lookup, std::net::IpAddr};
 mod admission;
 
 #[derive(Debug, Clone, Serialize, Deserialize, TS)]
@@ -165,26 +166,39 @@ fn envelope<Q, S, N, O, C>(
         simultaneous_snapshots: false,
     }
 }
-fn exceeded(dimension: &'static str, limit: usize) -> SourceHandoffCidrError {
+pub(crate) fn exceeded(dimension: &'static str, limit: usize) -> SourceHandoffCidrError {
     SourceHandoffCidrError::BudgetExceeded { dimension, limit }
 }
-fn check(value: usize, limit: usize, dimension: &'static str) -> Result<()> {
+pub(crate) fn check(value: usize, limit: usize, dimension: &'static str) -> Result<()> {
     if value > limit {
         Err(exceeded(dimension, limit))
     } else {
         Ok(())
     }
 }
-fn checked(value: Option<usize>, limit: usize, dimension: &'static str) -> Result<usize> {
+pub(crate) fn checked(
+    value: Option<usize>,
+    limit: usize,
+    dimension: &'static str,
+) -> Result<usize> {
     let value = value.ok_or_else(|| exceeded(dimension, limit))?;
     check(value, limit, dimension)?;
     Ok(value)
 }
-fn add(total: &mut usize, value: usize, limit: usize, dimension: &'static str) -> Result<()> {
+pub(crate) fn add(
+    total: &mut usize,
+    value: usize,
+    limit: usize,
+    dimension: &'static str,
+) -> Result<()> {
     *total = checked(total.checked_add(value), limit, dimension)?;
     Ok(())
 }
-fn encoded_len<T: Serialize>(value: &T, limit: usize, dimension: &'static str) -> Result<usize> {
+pub(crate) fn encoded_len<T: Serialize>(
+    value: &T,
+    limit: usize,
+    dimension: &'static str,
+) -> Result<usize> {
     vpc_cidr_coverage::serialized_size(value, limit).map_err(|e| match e {
         vpc_cidr_coverage::VpcCidrCoverageError::BudgetExceeded { .. } => {
             exceeded(dimension, limit)
@@ -192,22 +206,7 @@ fn encoded_len<T: Serialize>(value: &T, limit: usize, dimension: &'static str) -
         _ => SourceHandoffCidrError::PartitionProofUnavailable,
     })
 }
-fn ordinal(ip: IpAddr) -> u128 {
-    match ip {
-        IpAddr::V4(v) => u128::from(u32::from(v)),
-        IpAddr::V6(v) => u128::from(v),
-    }
-}
-fn address(value: u128, v4: bool) -> Result<String> {
-    Ok(if v4 {
-        Ipv4Addr::from(
-            u32::try_from(value).map_err(|_| SourceHandoffCidrError::PartitionProofUnavailable)?,
-        )
-        .to_string()
-    } else {
-        Ipv6Addr::from(value).to_string()
-    })
-}
+use super::cidr_partition::{Transitions, VpcMembership, address, ordinal, visit_vpc_memberships};
 pub(crate) fn validate_query(q: &SourceHandoffCidrQuery) -> Result<IpNet> {
     for (field, value) in [
         ("source_account_id", q.source_account_id.as_str()),
@@ -236,7 +235,7 @@ pub(crate) fn validate_query(q: &SourceHandoffCidrQuery) -> Result<IpNet> {
     }
     Ok(net)
 }
-fn identity(saved: &SavedObservation, expected: &str) -> Result<()> {
+pub(crate) fn identity(saved: &SavedObservation, expected: &str) -> Result<()> {
     let a = &saved.registration;
     let t = &saved.topology;
     if a.id != expected
@@ -260,74 +259,20 @@ fn collect_origins(
     net: IpNet,
     b: SourceHandoffCidrBudget,
 ) -> Result<(Vec<u128>, Vec<CutOrigin>)> {
-    let (lo, hi) = (ordinal(net.network()), ordinal(net.broadcast()));
-    let mut raw = Vec::new();
-    let mut push = |at, predicate, edge, clipped| -> Result<()> {
-        check(
-            raw.len()
-                .checked_add(1)
-                .ok_or_else(|| exceeded("raw_origins", b.raw_origins))?,
-            b.raw_origins,
-            "raw_origins",
-        )?;
-        raw.push((
-            at,
-            raw.len(),
-            CutOrigin {
-                cut_index: 0,
-                predicate,
-                edge,
-                clipped,
+    let mut transitions = Transitions::new(net, CutPredicate::Query, b.raw_origins, b.segments)?;
+    visit_vpc_memberships(&source.topology, |value, origin| {
+        let predicate = match origin {
+            VpcMembership::Route {
+                resource_index,
+                route_index,
+            } => CutPredicate::SourceVpcRoute {
+                resource_index,
+                route_index,
             },
-        ));
-        Ok(())
-    };
-    push(lo, CutPredicate::Query, CutEdge::QueryStart, false)?;
-    let mut membership = |value: IpNet, predicate: CutPredicate| -> Result<()> {
-        if value.addr().is_ipv4() != net.addr().is_ipv4() {
-            return Ok(());
-        }
-        let (nlo, nhi) = (ordinal(value.network()), ordinal(value.broadcast()));
-        let (start, end) = (nlo.max(lo), nhi.min(hi));
-        if start <= end {
-            push(start, predicate, CutEdge::Enter, start != nlo)?;
-            if end < hi {
-                push(
-                    end.checked_add(1)
-                        .ok_or(SourceHandoffCidrError::PartitionProofUnavailable)?,
-                    predicate,
-                    CutEdge::Leave,
-                    false,
-                )?;
-            }
-        }
-        Ok(())
-    };
-    for (resource_index, row) in source
-        .topology
-        .resources
-        .iter()
-        .enumerate()
-        .filter(|(_, r)| r.kind == ResourceKind::RouteTable)
-    {
-        for (route_index, route) in row.routes.iter().enumerate() {
-            if let Ok(value) = vpc_lookup::destination_network(route) {
-                membership(
-                    value,
-                    CutPredicate::SourceVpcRoute {
-                        resource_index,
-                        route_index,
-                    },
-                )?;
-            }
-        }
-    }
-    for (policy_index, value) in vpc_lookup::reserved_service_networks()
-        .into_iter()
-        .enumerate()
-    {
-        membership(value, CutPredicate::VpcService { policy_index })?;
-    }
+            VpcMembership::Service { policy_index } => CutPredicate::VpcService { policy_index },
+        };
+        transitions.membership(value, predicate)
+    })?;
     for (resource_index, row) in network
         .topology
         .resources
@@ -342,7 +287,7 @@ fn collect_origins(
                 .as_ref()
                 .and_then(|s| s.parse::<IpNet>().ok())
             {
-                membership(
+                transitions.membership(
                     value,
                     CutPredicate::NetworkTgwRoute {
                         resource_index,
@@ -352,18 +297,12 @@ fn collect_origins(
             }
         }
     }
-    raw.sort_unstable_by_key(|(at, sequence, _)| (*at, *sequence));
-    let mut cuts = Vec::new();
-    let mut origins = Vec::new();
-    for (at, _, mut origin) in raw {
-        if cuts.last() != Some(&at) {
-            check(cuts.len() + 1, b.segments, "segments")?;
-            cuts.push(at);
-        }
-        origin.cut_index = cuts.len() - 1;
-        origins.push(origin);
-    }
-    Ok((cuts, origins))
+    transitions.finish(|cut_index, predicate, edge, clipped| CutOrigin {
+        cut_index,
+        predicate,
+        edge,
+        clipped,
+    })
 }
 /// Uniformity BEFORE witnesses: fixed family and ALL source VPC/service/network TGW membership
 /// transitions fix the source winner (including alternate TGWs). For that fixed winner every ordered
