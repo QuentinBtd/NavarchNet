@@ -48,7 +48,7 @@ test("real browser: reader binds saved source and network observations to an ing
     route_table_id: "tgw-rtb-browser-b",
     lookup: { status: "reported_forward" },
   });
-  await page.goto("/");
+  await page.goto("/#/aws");
   await page
     .getByLabel("Demo token or OIDC access token")
     .fill("browser-test-reader-credential-free-local-only");

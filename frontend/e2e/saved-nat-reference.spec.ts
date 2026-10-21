@@ -38,7 +38,7 @@ test("real browser: reader explicitly joins a saved subnet entry to its literal 
   page.on("request", (request) => {
     if (request.url().includes("/nat-reference-lookup")) calls.push(request.url());
   });
-  await page.goto("/");
+  await page.goto("/#/aws");
   await page
     .getByLabel("Demo token or OIDC access token")
     .fill("browser-test-reader-credential-free-local-only");

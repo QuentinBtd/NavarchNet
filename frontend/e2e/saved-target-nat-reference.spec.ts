@@ -47,7 +47,7 @@ test("real browser: source A explicitly inspects every target subnet NAT referen
   page.on("request", (value) => {
     if (value.url().includes("/nat-reference-lookup")) calls.push(value.url());
   });
-  await page.goto("/");
+  await page.goto("/#/aws");
   await page
     .getByLabel("Demo token or OIDC access token")
     .fill("browser-test-reader-credential-free-local-only");

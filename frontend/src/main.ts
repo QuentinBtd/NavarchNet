@@ -1,3 +1,4 @@
+import { renderShell } from "./app-shell";
 import { renderAwsTopology } from "./aws-view";
 import type {
   Account,
@@ -21,27 +22,14 @@ import type {
   VpcCidrCoverageResponse,
   VpcLookupResponse,
 } from "./generated";
+import { createNavigation } from "./navigation";
 import { Session } from "./session";
 import { operationLabel, renderObservation, text } from "./view";
 import "./style.css";
 
 const app = document.querySelector<HTMLDivElement>("#app");
 if (!app) throw new Error("Application root missing");
-// This template is static. All provider-controlled content uses textContent.
-app.innerHTML = `
-<header><div class="brand">N / NavarchNet</div><span>Self-hosted network control</span></header>
-<main><section class="hero"><p class="eyebrow">REGIONAL NETWORK ORCHESTRATION</p><h1>Know where your traffic goes.</h1><p>Review the path. Apply an auditable plan. Inspect what actually converged.</p><p class="warning">Simulation and opt-in AWS read-only observations are separate. AWS execution and active connectivity testing are disabled.</p></section>
-<section id="session"><h2>Operator session</h2><form id="login"><label for="token">Demo token or OIDC access token</label><div class="row"><input id="token" type="password" required autocomplete="off"><button>Connect</button><button id="logout" type="button">Sign out</button></div></form><p id="identity">Not authenticated. Tokens stay in memory only.</p></section>
-<p id="notice" role="status" aria-live="polite"></p>
-<div id="workspace" hidden><nav aria-label="Workspace"><a href="#overview">Overview</a><a href="#accounts">Accounts</a><a href="#aws">AWS observations</a><a href="#networks">Regional networks</a><a href="#connect">Connect VPC</a><a href="#plans">Plans</a><a href="#operations">Operations</a><a href="#diagnostics">Diagnostics</a><button id="refresh" type="button">Refresh</button></nav>
-<section id="overview"><h2>Network overview</h2><p id="summary"></p><p>Policy v1: regional IPv4 egress, explicitly managed routes, application VPC isolation. Shared services, IPv6, inter-region fallback and active probes are not supported.</p></section>
-<div class="grid"><section id="accounts"><h2>Simulation provider accounts</h2><form id="register"><label for="account-name">Account name</label><input id="account-name" required maxlength="120" value="Application account"><p>Credential-free fake role for the simulated connection journey. AWS observations cannot be executed by this planner.</p><button data-write>Register fake account</button></form><ul id="account-list"></ul></section>
-<section id="networks"><h2>Regional networks & egress</h2><form id="network-form"><label for="network-name">Network name</label><input id="network-name" required maxlength="120" value="EU regional egress"><button data-write>Create simulated regional network</button></form><ul id="network-list"></ul></section></div>
-<section id="connect"><h2>Connect a VPC (simulation only)</h2><form id="plan-form"><div class="grid"><div><label for="vpc">Discovered VPC</label><select id="vpc" required></select><fieldset><legend>Attachment subnets (one per AZ ID)</legend><div id="subnets"></div></fieldset></div><div><label for="network">Regional egress network</label><select id="network" required></select><p>Egress policy: same-region managed NAT, no application-to-application permission. Discovery marks only synthetic demo routes as owned.</p></div></div><button data-write>Generate immutable change plan</button></form></section>
-<section id="aws"><h2>AWS read-only accounts & topology</h2><p id="aws-access"></p><form id="aws-register" hidden><label for="aws-name">AWS account name</label><input id="aws-name" required maxlength="120"><label for="aws-role">Target IAM role ARN</label><input id="aws-role" required maxlength="2048" placeholder="arn:aws:iam::123456789012:role/NavarchNetReader"><label for="aws-region">Allowed AWS region</label><select id="aws-region" required></select><label for="aws-external-id">STS ExternalId (optional, never returned in read-only account views)</label><input id="aws-external-id" type="password" maxlength="1224" autocomplete="off"><p>Uses the controller SDK credential chain and a temporary assumed role. Do not enter permanent AWS access keys. Registration verifies the caller; discovery only reads metadata. No cloud mutation is enabled.</p><button data-write data-aws-write>Verify and register AWS role</button></form><ul id="aws-account-list"></ul><div id="aws-topology"></div></section>
-<section id="plans"><h2>Review change plans</h2><p>Review prerequisites and postconditions before applying. Applying does not create an atomic cloud transaction.</p><label for="fault">Demo execution scenario</label><select id="fault"><option value="none">Normal</option><option value="throttle">Throttling with retry</option><option value="eventual_consistency">Eventually visible attachment</option><option value="credential_expiry">Expired temporary session</option><option value="permission">Permission denied</option><option value="partial_failure">Partial failure after return routing</option></select><div id="plan-list"></div></section>
-<section id="operations"><h2>Durable operation history</h2><p>Refresh to see persisted progress. Closing this browser does not stop execution.</p><div id="operation-list"></div><div id="observation"></div></section>
-<section id="diagnostics"><h2>Diagnostics</h2><p>Measurements are untested. A missing future probe heartbeat must not imply an Internet outage. No automatic repair is enabled.</p><button id="audit" type="button">Load audit trail</button><pre id="diagnostic-output"></pre></section></div></main><footer>Apache-2.0 · Development preview · AWS execution disabled · No cloud connectivity verified</footer>`;
+renderShell(app);
 
 function element<T extends HTMLElement = HTMLElement>(id: string): T {
   const found = document.getElementById(id);
@@ -52,6 +40,19 @@ const session = new Session();
 let snapshot: Snapshot | undefined;
 let selectedAwsAccountId: string | undefined;
 let awsViewVersion = 0;
+const navigation = createNavigation(app, () => {
+  session.retireRequests();
+  ++awsViewVersion;
+  selectedAwsAccountId = undefined;
+  for (const node of document.querySelectorAll<HTMLButtonElement>("[data-pending]")) {
+    node.disabled =
+      (node.hasAttribute("data-write") && !isAdmin()) ||
+      (node.hasAttribute("data-aws-write") && !snapshot?.aws_read_only_enabled);
+    delete node.dataset.pending;
+  }
+  for (const id of ["aws-topology", "observation", "operation-events", "diagnostic-output", "notice"])
+    element(id).replaceChildren();
+});
 const selectedInventory = () =>
   snapshot?.inventory.find((i) => i.vpc_id === element<HTMLSelectElement>("vpc").value);
 const isAdmin = () => snapshot?.role === "admin";
@@ -74,11 +75,17 @@ async function run(action: () => Promise<void>) {
 function button(label: string, action: () => Promise<void>, writes = false): HTMLButtonElement {
   const node = text("button", label);
   node.type = "button";
+  if (writes) node.dataset.write = "";
   node.disabled = writes && !isAdmin();
   node.onclick = () => {
+    const version = session.version;
     node.disabled = true;
+    node.dataset.pending = "";
     void run(action).finally(() => {
-      node.disabled = writes && !isAdmin();
+      if (version === session.version) {
+        node.disabled = writes && !isAdmin();
+        delete node.dataset.pending;
+      }
     });
   };
   return node;
@@ -143,6 +150,7 @@ function renderPlans(plans: Plan[]) {
             const body: ApplyPlan = { fault: element<HTMLSelectElement>("fault").value as Fault };
             await request<Operation>(`/plans/${plan.id}/apply`, body);
             await refresh();
+            navigation.navigate("operations");
           },
           true,
         ),
@@ -165,7 +173,7 @@ function renderOperations(operations: Operation[]) {
         button("Inspect result & step events", async () => {
           const value = await request<Observation>(`/operations/${operation.id}/observation`);
           element("observation").replaceChildren(renderObservation(value));
-          element("diagnostic-output").textContent = JSON.stringify(
+          element("operation-events").textContent = JSON.stringify(
             await request(`/operations/${operation.id}/events`),
             null,
             2,
@@ -190,6 +198,7 @@ function renderOperations(operations: Operation[]) {
   );
 }
 async function loadAwsTopology(id: string) {
+  navigation.navigate("aws");
   selectedAwsAccountId = id;
   const version = ++awsViewVersion;
   element("aws-topology").replaceChildren();
@@ -355,6 +364,7 @@ function renderAwsAccounts() {
         true,
       );
       discover.disabled = !enabled || !isAdmin();
+      discover.dataset.awsWrite = "";
       row.append(discover);
       return row;
     }),
@@ -362,7 +372,7 @@ function renderAwsAccounts() {
 }
 async function refresh() {
   snapshot = await request<Snapshot>("/snapshot");
-  element("workspace").hidden = false;
+  navigation.authenticate(true);
   element("identity").textContent =
     `${snapshot.mode} authentication · ${snapshot.role} · simulated execution · AWS read-only ${snapshot.aws_read_only_enabled ? "enabled" : "disabled"}`;
   element("summary").textContent =
@@ -420,13 +430,14 @@ element<HTMLFormElement>("login").onsubmit = (event) => {
   void run(refresh);
 };
 function clearSession() {
+  connectionStep(false);
   element<HTMLFormElement>("aws-register").reset();
   element("aws-register").hidden = true;
   ++awsViewVersion;
   selectedAwsAccountId = undefined;
   session.logout();
   snapshot = undefined;
-  element("workspace").hidden = true;
+  navigation.authenticate(false);
   element("identity").textContent = "Signed out";
   for (const id of [
     "diagnostic-output",
@@ -435,6 +446,7 @@ function clearSession() {
     "plan-list",
     "operation-list",
     "observation",
+    "operation-events",
     "summary",
     "vpc",
     "network",
@@ -466,6 +478,21 @@ element<HTMLFormElement>("aws-register").onsubmit = (event) => {
   });
 };
 element<HTMLSelectElement>("vpc").onchange = renderSubnets;
+let configuringConnection = false;
+function connectionStep(configure: boolean) {
+  if (configure && !selectedInventory()) throw new Error("Register and discover an account first");
+  configuringConnection = configure;
+  element("connection-select").hidden = configure;
+  element("connection-configure").hidden = !configure;
+  element("connection-select").inert = configure;
+  element("connection-configure").inert = !configure;
+  element<HTMLSelectElement>("network").disabled = !configure;
+  element("connection-step").textContent = configure
+    ? "2. Configure subnets & egress → 3. Review plan"
+    : "1. Select VPC → 2. Configure → 3. Review plan";
+}
+element("configure-connection").onclick = () => void run(async () => connectionStep(true));
+element("connection-back").onclick = () => connectionStep(false);
 element<HTMLFormElement>("register").onsubmit = (event) => {
   event.preventDefault();
   void run(async () => {
@@ -488,6 +515,10 @@ element<HTMLFormElement>("network-form").onsubmit = (event) => {
 element<HTMLFormElement>("plan-form").onsubmit = (event) => {
   event.preventDefault();
   void run(async () => {
+    if (!configuringConnection) {
+      connectionStep(true);
+      return;
+    }
     const inventory = selectedInventory();
     if (!inventory) throw new Error("Register and discover an account first");
     const body: ConnectionRequest = {
@@ -501,7 +532,7 @@ element<HTMLFormElement>("plan-form").onsubmit = (event) => {
     };
     await request<Plan>("/plans", body);
     await refresh();
-    element("plans").scrollIntoView();
+    navigation.navigate("plans");
   });
 };
 element("audit").onclick = () =>

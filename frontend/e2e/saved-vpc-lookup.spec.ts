@@ -30,7 +30,7 @@ test("real browser: reader inspects saved subnet entries, blackholes and reserve
     source: "implicit_main",
     lookup: { status: "reported_route", target: { kind: "transit_gateway", id: "tgw-browser-a" } },
   });
-  await page.goto("/");
+  await page.goto("/#/aws");
   await page
     .getByLabel("Demo token or OIDC access token")
     .fill("browser-test-reader-credential-free-local-only");

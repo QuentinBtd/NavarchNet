@@ -299,6 +299,23 @@ function startLookup() {
   input.value = "203.0.113.1";
   form.dispatchEvent(new Event("submit", { cancelable: true }));
 }
+it("navigation retires an ignored-abort audit response across an away/back cycle", async () => {
+  const old = deferred();
+  await boot(async () => old.promise);
+  const go = (route: string) => {
+    window.location.hash = `#/${route}`;
+    window.dispatchEvent(new HashChangeEvent("hashchange"));
+  };
+  go("diagnostics");
+  document.querySelector<HTMLButtonElement>("#audit")?.click();
+  go("operations");
+  go("diagnostics");
+  old.resolve(response({ retired_audit: "old route evidence" }));
+  await new Promise((resolve) => setTimeout(resolve, 0));
+  expect(document.querySelector("#diagnostic-output")?.textContent).toBe("");
+  expect(document.querySelector("#notice")?.textContent).toBe("");
+});
+
 it("CIDR reads use exact account/query bindings and retire on switch, ABA, reload, login and discovery despite ignored abort", async () => {
   for (const retirement of ["switch", "ABA", "reload", "logout", "login", "discovery"])
     for (const failed of [false, true]) {

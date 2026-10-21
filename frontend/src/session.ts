@@ -11,10 +11,14 @@ export class Session {
     this.token = token;
   }
   logout() {
+    this.retireRequests();
+    this.token = "";
+  }
+  // Retire a view without changing identity. Abort is not cancellation of server execution.
+  retireRequests() {
     this.controller.abort();
     this.controller = new AbortController();
     this.generation++;
-    this.token = "";
   }
   async request<T>(path: string, body?: unknown): Promise<T> {
     const generation = this.generation;

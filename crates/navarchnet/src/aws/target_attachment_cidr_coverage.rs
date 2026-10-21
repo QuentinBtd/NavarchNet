@@ -155,7 +155,7 @@ fn envelope<Q, S, O, C>(
         connectivity_tested: false,
     }
 }
-fn validate_query(q: &TargetAttachmentCidrQuery) -> Result<IpNet> {
+pub(crate) fn validate_query(q: &TargetAttachmentCidrQuery) -> Result<IpNet> {
     for (field, value) in [
         ("network_account_id", q.network_account_id.as_str()),
         ("transit_gateway_id", q.transit_gateway_id.as_str()),

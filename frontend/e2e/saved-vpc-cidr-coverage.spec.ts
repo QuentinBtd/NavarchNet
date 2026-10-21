@@ -54,7 +54,7 @@ test("real browser: reader inspects exact saved CIDR decisions without missing a
     if (event.url().includes("/vpc-cidr-coverage?")) queries.push(event.url());
     if (event.url().includes("/vpc-route-lookup?")) points.push(event.url());
   });
-  await page.goto("/");
+  await page.goto("/#/aws");
   await page
     .getByLabel("Demo token or OIDC access token")
     .fill("browser-test-reader-credential-free-local-only");

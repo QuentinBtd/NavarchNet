@@ -38,7 +38,7 @@ test("real browser: reader inspects literal saved NAT address tuples without sel
   expect(nat.subnet_id).toBeNull();
   expect(savedBefore.topology.execution_enabled).toBe(false);
   expect(savedBefore.topology.connectivity_tested).toBe(false);
-  await page.goto("/");
+  await page.goto("/#/aws");
   await page
     .getByLabel("Demo token or OIDC access token")
     .fill("browser-test-reader-credential-free-local-only");

@@ -41,7 +41,7 @@ test("real browser: reader explicitly follows a reported attachment into same-sn
     "euw1-az1",
     "euw1-az2",
   ]);
-  await page.goto("/");
+  await page.goto("/#/aws");
   await page
     .getByLabel("Demo token or OIDC access token")
     .fill("browser-test-reader-credential-free-local-only");

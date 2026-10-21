@@ -53,7 +53,7 @@ test("real browser: reader explicitly inspects independent saved source-to-TGW C
   expect(await saved(network.id)).toEqual(networkBefore);
   expect(await (await request.get("/api/v1/snapshot", { headers })).json()).toEqual(before);
 
-  await page.goto("/");
+  await page.goto("/#/aws");
   await page
     .getByLabel("Demo token or OIDC access token")
     .fill("browser-test-reader-credential-free-local-only");

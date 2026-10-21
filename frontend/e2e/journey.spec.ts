@@ -1,6 +1,8 @@
 import { expect, test } from "@playwright/test";
 
-test("real browser: register, discover, plan, apply, observe drift and partial failure", async ({ page }) => {
+test("real browser: register, discover, plan, apply, observe drift and partial failure", async ({
+  page,
+}, testInfo) => {
   const name = `Browser app ${Date.now()}`;
   const network = `Browser egress ${Date.now()}`;
   await page.goto("/");
@@ -9,6 +11,11 @@ test("real browser: register, discover, plan, apply, observe drift and partial f
     .fill("browser-test-admin-credential-free-local-only");
   await page.getByRole("button", { name: "Connect", exact: true }).click();
   await expect(page.locator("#workspace")).toBeVisible();
+  await page
+    .getByRole("navigation", { name: "Workspace" })
+    .getByRole("link", { name: "Accounts & discovery", exact: true })
+    .click();
+  await page.getByText("Register simulation account", { exact: true }).click();
   await page.getByLabel("Account name", { exact: true }).fill(name);
   await page.getByRole("button", { name: "Register fake account" }).click();
   const account = page.locator("#account-list li").filter({ hasText: name });
@@ -17,17 +24,33 @@ test("real browser: register, discover, plan, apply, observe drift and partial f
   await expect(page.locator("#vpc option").filter({ hasText: name })).toHaveCount(1);
   const vpc = await page.locator("#vpc option").filter({ hasText: name }).getAttribute("value");
   if (!vpc) throw new Error("Discovered VPC missing");
-  await page.getByLabel("Discovered VPC", { exact: true }).selectOption(vpc);
+  await page
+    .getByRole("navigation", { name: "Workspace" })
+    .getByRole("link", { name: "Regional networks", exact: true })
+    .click();
+  await page.getByText("Create regional network", { exact: true }).click();
   await page.getByLabel("Network name", { exact: true }).fill(network);
   await page.getByRole("button", { name: "Create simulated regional network" }).click();
   await expect(page.locator("#network option").filter({ hasText: network })).toHaveCount(1);
   const networkId = await page.locator("#network option").filter({ hasText: network }).getAttribute("value");
   if (!networkId) throw new Error("Created network missing");
+  await page
+    .getByRole("navigation", { name: "Workspace" })
+    .getByRole("link", { name: "Connections / plans", exact: true })
+    .click();
+  await page.getByLabel("Discovered VPC", { exact: true }).selectOption(vpc);
+  await expect(page.locator("#connection-configure")).toBeHidden();
+  await page.getByRole("button", { name: "Configure connection", exact: true }).click();
+  await expect(page.locator("#connection-select")).toBeHidden();
   await page.getByLabel("Regional egress network").selectOption(networkId);
   await page.getByRole("button", { name: "Generate immutable change plan" }).click();
   const plan = page.locator("#plan-list article").first();
   await expect(plan).toContainText(vpc);
   await expect(plan).toContainText("return_route");
+  await expect(page).toHaveURL(/#\/plans$/);
+  await expect(page.locator("[data-workspace]:visible")).toHaveCount(1);
+  await page.setViewportSize({ width: 1440, height: 900 });
+  await page.screenshot({ path: testInfo.outputPath("compact-plan-review.png"), fullPage: true });
   await page.getByLabel("Demo execution scenario").selectOption("throttle");
   await plan.getByRole("button", { name: "Apply reviewed plan" }).click();
   await expect
@@ -41,6 +64,10 @@ test("real browser: register, discover, plan, apply, observe drift and partial f
   await expect(page.locator("#observation")).toContainText("Not tested");
   await operation.getByRole("button", { name: "Simulate external drift" }).click();
   await expect(page.locator("#observation")).toContainText("Detected — no automatic repair");
+  await page
+    .getByRole("navigation", { name: "Workspace" })
+    .getByRole("link", { name: "Connections / plans", exact: true })
+    .click();
   await page.getByRole("button", { name: "Generate immutable change plan" }).click();
   await page.getByLabel("Demo execution scenario").selectOption("partial_failure");
   await page
@@ -67,6 +94,11 @@ test("read-only session cannot mutate through UI or API", async ({ page, request
     .getByLabel("Demo token or OIDC access token")
     .fill("browser-test-reader-credential-free-local-only");
   await page.getByRole("button", { name: "Connect", exact: true }).click();
+  await page
+    .getByRole("navigation", { name: "Workspace" })
+    .getByRole("link", { name: "Accounts & discovery", exact: true })
+    .click();
+  await page.getByText("Register simulation account", { exact: true }).click();
   await expect(page.getByRole("button", { name: "Register fake account" })).toBeDisabled();
   const response = await request.post("/api/v1/accounts", {
     headers: { Authorization: "Bearer browser-test-reader-credential-free-local-only" },
@@ -84,7 +116,7 @@ test("real browser demo keeps AWS off and rejects role onboarding without changi
   const catalog = await request.get("/api/v1/aws/accounts", { headers });
   expect(catalog.status()).toBe(200);
   expect(await catalog.json()).toEqual(before.aws_accounts);
-  await page.goto("/");
+  await page.goto("/#/aws");
   await page
     .getByLabel("Demo token or OIDC access token")
     .fill("browser-test-admin-credential-free-local-only");

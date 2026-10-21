@@ -21,6 +21,7 @@ use std::sync::Arc;
 use tower_http::{services::ServeDir, set_header::SetResponseHeaderLayer};
 use ts_rs::TS;
 mod source_cidr;
+mod target_cidr;
 
 #[derive(Clone)]
 pub struct AppState {
@@ -263,6 +264,10 @@ pub fn router(state: AppState) -> Router {
         .route(
             "/aws/accounts/{id}/tgw-target-lookup",
             get(lookup_aws_target),
+        )
+        .route(
+            "/aws/accounts/{id}/tgw-target-cidr-coverage",
+            get(target_cidr::coverage),
         )
         .route("/networks", post(create_network))
         .route("/plans", post(create_plan))

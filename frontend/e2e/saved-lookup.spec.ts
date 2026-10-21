@@ -23,7 +23,7 @@ test("real browser: reader looks up saved TGW forward, blackhole and unresolved 
   const savedResponse = await request.get(path, { headers });
   expect(savedResponse.status()).toBe(200);
   const savedBefore = await savedResponse.json();
-  await page.goto("/");
+  await page.goto("/#/aws");
   await page
     .getByLabel("Demo token or OIDC access token")
     .fill("browser-test-reader-credential-free-local-only");

@@ -57,7 +57,7 @@ test("real browser: reader independently inspects a source attachment-subnet tab
     if (event.url().includes("/vpc-route-lookup?")) queries.push(event.url());
     if (event.url().includes("/tgw-source-lookup?")) parentQueries.push(event.url());
   });
-  await page.goto("/");
+  await page.goto("/#/aws");
   await page
     .getByLabel("Demo token or OIDC access token")
     .fill("browser-test-reader-credential-free-local-only");

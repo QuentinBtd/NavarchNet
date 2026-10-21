@@ -464,6 +464,29 @@ async fn target_attachment_cidr_saved_capture_retains_all_declared_subnets() -> 
         },
         TargetAttachmentCidrBudget::default(),
     )?;
+    // Exercise the actual protected HTTP boundary against this independently analyzed capture.
+    use axum::{
+        body::{Body, to_bytes},
+        http::{Request, StatusCode},
+    };
+    use navarchnet::{
+        api::{self, AppState},
+        auth::Auth,
+    };
+    use std::sync::Arc;
+    use tower::ServiceExt;
+    let app = api::router(AppState {
+        store: store.clone(),
+        auth: Arc::new(Auth::demo("a".repeat(32), "r".repeat(32))?),
+        aws: None,
+    });
+    let response = app.oneshot(Request::builder()
+        .uri(format!("/api/v1/aws/accounts/{}/tgw-target-cidr-coverage?transit_gateway_id=tgw-target&target_attachment_id=tgw-attach-target&destination_cidr=203.0.113.0%2F29", account.id))
+        .header("authorization", format!("Bearer {}", "r".repeat(32)))
+        .body(Body::empty())?).await?;
+    assert_eq!(response.status(), StatusCode::OK);
+    let bytes = to_bytes(response.into_body(), 4 * 1024 * 1024).await?;
+    assert_eq!(bytes.as_ref(), serde_json::to_vec(&result)?);
     assert_eq!(result.az_selection, TargetAzSelection::NotInferred);
     assert!(result.reference_only && result.partition_complete);
     assert!(!result.execution_enabled && !result.connectivity_tested);
