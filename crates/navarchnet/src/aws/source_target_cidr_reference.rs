@@ -99,7 +99,7 @@ fn envelope<Q, S, T, C>(
         simultaneous_snapshots: false,
     }
 }
-fn validate(q: &SourceTargetCidrQuery) -> Result<(IpNet, usize)> {
+pub(crate) fn validate(q: &SourceTargetCidrQuery) -> Result<(IpNet, usize)> {
     let mut bytes = 0usize;
     for (field, value, limit) in [
         ("source_account_id", &q.source_account_id, 2048),
@@ -120,7 +120,8 @@ fn validate(q: &SourceTargetCidrQuery) -> Result<(IpNet, usize)> {
             .map_err(|_| SourceHandoffCidrError::InvalidQuery {
                 field: "destination_cidr",
             })?;
-    if net.addr() != net.network() {
+    // Both unchanged children require this spelling too; reject it before any saved read.
+    if net.addr() != net.network() || net.to_string() != q.destination_cidr {
         return Err(SourceHandoffCidrError::InvalidQuery {
             field: "destination_cidr",
         });

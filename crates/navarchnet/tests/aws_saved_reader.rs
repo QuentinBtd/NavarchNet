@@ -585,6 +585,37 @@ async fn target_attachment_cidr_saved_capture_retains_all_declared_subnets() -> 
         !joint.execution_enabled && !joint.connectivity_tested && !joint.simultaneous_snapshots
     );
     assert!(joint.segments.iter().all(|c| !c.selected_reference_matches));
+    let app = api::router(AppState {
+        store: store.clone(),
+        auth: Arc::new(Auth::demo("a".repeat(32), "r".repeat(32))?),
+        aws: None,
+    });
+    let query = form_urlencoded::Serializer::new(String::new())
+        .append_pair("network_account_id", &account.id)
+        .append_pair("subnet_id", "subnet-a")
+        .append_pair("transit_gateway_id", "tgw-target")
+        .append_pair("target_attachment_id", "tgw-attach-target")
+        .append_pair("destination_cidr", "203.0.113.0/29")
+        .finish();
+    let response = app
+        .oneshot(
+            Request::builder()
+                .uri(format!(
+                    "/api/v1/aws/accounts/{}/tgw-source-target-cidr-reference?{query}",
+                    account.id
+                ))
+                .header("authorization", format!("Bearer {}", "r".repeat(32)))
+                .body(Body::empty())?,
+        )
+        .await?;
+    assert_eq!(response.status(), StatusCode::OK);
+    assert_eq!(response.headers()["cache-control"], "no-store");
+    let body = to_bytes(
+        response.into_body(),
+        SourceTargetCidrBudget::default().response_bytes,
+    )
+    .await?;
+    assert_eq!(body.as_ref(), serde_json::to_vec(&joint)?);
     assert_eq!(
         before,
         fingerprint().await?,

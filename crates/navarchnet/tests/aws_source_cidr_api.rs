@@ -1,3 +1,5 @@
+#[path = "support/source_target_reference_cases.rs"]
+mod reference_cases;
 mod support;
 use axum::{
     Router,

@@ -2,7 +2,13 @@
 
 NavarchNet has an implemented fake-provider journey and a locally exercised AWS read-only account/topology slice, not a completed AWS V1 orchestrator. No live AWS API call/resource mutation, release/tag publication, crates.io upload or GHCR upload has occurred.
 
-## Current continuation — bounded offline source/target references
+## Current continuation — protected saved source/target reference reader
+
+The existing library composer now has a thin reader/admin GET with five strict required query fields and a sole source-registration path. Authentication precedes extraction; shared literal/canonical validation precedes two SQL-gated saved reads with one checked aggregate remaining allowance. The original redacted mapper and trusted default analysis limits apply, and the counted core envelope returns directly. No private role/adoption/SDK read, new permission, frontend consumer or diagnostic form is added. Canonical spelling that both children already reject is now rejected at root validation, before database access or root reservations; saved route literals and point semantics are unchanged.
+
+Actual PostgreSQL/router missing-route 404-versus-200 RED preceded byte-exact GREEN, including the existing second-subnet blackhole and full raw/catalog nonmutation oracle. A closed-pool 409-versus-422 RED exposed deferred rejection of uppercase IPv6 spelling; shared root validation now rejects it before reads. A separate temporary fixture borrow-check error was corrected, not called a behavioral RED. Fresh scoped strict Clippy, 108 library tests and 16 saved-reader/source/target API checks pass. Four new API cases cover strict/auth/pre-read admission, both-side atomic refusals, aggregate raw bytes, private-data independence, pending/latest/same-registration captures and exact successful JSON larger than 1 MiB. Full installed hooks, independent exact-source review and remote backup remain pending. No new feature-specific browser/Docker, live AWS, usable path/traffic AZ, production or whole-mission acceptance is claimed.
+
+## Reviewed checkpoint — bounded offline source/target references
 
 A library-only composer intersects the existing complete source-to-TGW and explicitly selected target-attachment CIDR partitions. It retains both original child envelopes and all declared target-subnet outcomes; each joint interval references their original segment indexes instead of copying point decisions. One admitted copy of the supplied network capture gives both children identical evidence, without a fresh read or a simultaneity claim. Exact unique reported gateway/attachment equality is descriptive reference matching, not selection of a traffic AZ or a usable forward/return/NAT path. Execution/connectivity remain false. No endpoint, UI, TypeScript contract, provider, permission or AWS rule is added.
 

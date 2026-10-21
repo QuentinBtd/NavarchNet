@@ -79,7 +79,7 @@ impl IntoResponse for CoverageFailure {
         }
     }
 }
-fn remaining(
+pub(super) fn remaining(
     budget: SavedObservationReadBudget,
     charged: usize,
 ) -> Result<SavedObservationReadBudget, CoverageFailure> {
