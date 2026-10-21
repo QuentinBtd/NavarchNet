@@ -1,4 +1,5 @@
 import { expect, test } from "@playwright/test";
+import type { Snapshot } from "../src/generated";
 
 test("real browser: register, discover, plan, apply, observe drift and partial failure", async ({
   page,
@@ -56,14 +57,22 @@ test("real browser: register, discover, plan, apply, observe drift and partial f
   await page.setViewportSize({ width: 1440, height: 900 });
   await page.screenshot({ path: testInfo.outputPath("compact-plan-review.png"), fullPage: true });
   await page.getByLabel("Demo execution scenario").selectOption("throttle");
+  const firstApplied = page.waitForResponse(
+    (r) =>
+      r.request().method() === "POST" && new URL(r.url()).pathname === `/api/v1/plans/${firstSaved.id}/apply`,
+  );
   await plan.getByRole("button", { name: "Apply reviewed plan" }).click();
+  const firstApplyResponse = await firstApplied;
+  expect(firstApplyResponse.status()).toBe(200);
+  const firstOperation = await firstApplyResponse.json();
+  expect(typeof firstOperation.id).toBe("string");
+  let operation = page.locator("#operation-list article").filter({ hasText: firstOperation.id });
   await expect
     .poll(async () => {
       await page.getByRole("button", { name: "Refresh", exact: true }).click();
-      return page.locator("#operation-list article").first().textContent();
+      return operation.textContent();
     })
     .toContain("Simulation converged");
-  let operation = page.locator("#operation-list article").first();
   await operation.getByRole("button", { name: "Inspect result & step events" }).click();
   await expect(page.locator("#observation")).toContainText("Not tested");
   await operation.getByRole("button", { name: "Simulate external drift" }).click();
@@ -75,13 +84,25 @@ test("real browser: register, discover, plan, apply, observe drift and partial f
   const secondCreated = page.waitForResponse(
     (r) => r.request().method() === "POST" && new URL(r.url()).pathname === "/api/v1/plans",
   );
+  const secondSnapshot = page.waitForResponse(
+    (r) => r.request().method() === "GET" && new URL(r.url()).pathname === "/api/v1/snapshot",
+  );
   await page.getByRole("button", { name: "Generate immutable change plan" }).click();
   const secondSaved = await (await secondCreated).json();
   await expect(page).toHaveURL(/#\/plans$/);
   await expect(page.locator("#plan-list article")).toHaveCount(1);
   await expect(page.locator("#plan-list article")).toHaveAttribute("data-plan-id", secondSaved.id);
   const selection = page.getByLabel("Plan to review", { exact: true });
-  await expect(selection.locator("option")).toHaveCount(2);
+  const returnedSnapshot = (await (await secondSnapshot).json()) as Snapshot;
+  const returnedIds = returnedSnapshot.plans.map((p) => p.id);
+  expect(returnedIds).toContain(firstSaved.id);
+  expect(returnedIds).toContain(secondSaved.id);
+  await expect(selection.locator("option")).toHaveCount(returnedIds.length);
+  expect(
+    await selection
+      .locator("option")
+      .evaluateAll((options) => options.map((o) => (o as HTMLOptionElement).value)),
+  ).toEqual(returnedIds);
   const selectionCalls: string[] = [];
   page.on("request", (r) => selectionCalls.push(r.url()));
   await selection.selectOption(firstSaved.id);
@@ -110,6 +131,11 @@ test("real browser: register, discover, plan, apply, observe drift and partial f
   const applied = page.waitForRequest(
     (r) => r.method() === "POST" && new URL(r.url()).pathname.endsWith("/apply"),
   );
+  const secondApplied = page.waitForResponse(
+    (r) =>
+      r.request().method() === "POST" &&
+      new URL(r.url()).pathname === `/api/v1/plans/${secondSaved.id}/apply`,
+  );
   await page
     .locator("#plan-list article")
     .first()
@@ -118,13 +144,17 @@ test("real browser: register, discover, plan, apply, observe drift and partial f
   const appliedRequest = await applied;
   expect(new URL(appliedRequest.url()).pathname).toBe(`/api/v1/plans/${secondSaved.id}/apply`);
   expect(appliedRequest.postDataJSON()).toEqual({ fault: "partial_failure" });
+  const secondApplyResponse = await secondApplied;
+  expect(secondApplyResponse.status()).toBe(200);
+  const secondOperation = await secondApplyResponse.json();
+  expect(typeof secondOperation.id).toBe("string");
+  operation = page.locator("#operation-list article").filter({ hasText: secondOperation.id });
   await expect
     .poll(async () => {
       await page.getByRole("button", { name: "Refresh", exact: true }).click();
-      return page.locator("#operation-list article").first().textContent();
+      return operation.textContent();
     })
     .toContain("Partial completion");
-  operation = page.locator("#operation-list article").first();
   await expect(operation).toContainText("Conflicting manual NAT route");
   await page.getByRole("button", { name: "Sign out" }).click();
   await expect(page.locator("#workspace")).toBeHidden();
