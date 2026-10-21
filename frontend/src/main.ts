@@ -23,9 +23,10 @@ import type {
   VpcLookupResponse,
 } from "./generated";
 import { createNavigation } from "./navigation";
+import { renderOperationReview } from "./operation-review-view";
 import { renderPlanReview } from "./plan-review-view";
 import { Session } from "./session";
-import { operationLabel, renderObservation, text } from "./view";
+import { renderObservation, text } from "./view";
 import "./style.css";
 
 const app = document.querySelector<HTMLDivElement>("#app");
@@ -43,6 +44,8 @@ let selectedAwsAccountId: string | undefined;
 let awsViewVersion = 0;
 let selectedPlanId: string | undefined;
 let planViewVersion = 0;
+let selectedOperationId: string | undefined;
+let operationViewVersion = 0;
 const navigation = createNavigation(app, () => {
   session.retireRequests();
   ++awsViewVersion;
@@ -55,6 +58,7 @@ const navigation = createNavigation(app, () => {
   }
   for (const id of ["aws-topology", "observation", "operation-events", "diagnostic-output", "notice"])
     element(id).replaceChildren();
+  element("operation-events-details").removeAttribute("open");
 });
 const selectedInventory = () =>
   snapshot?.inventory.find((i) => i.vpc_id === element<HTMLSelectElement>("vpc").value);
@@ -62,16 +66,16 @@ const isAdmin = () => snapshot?.role === "admin";
 async function request<T>(path: string, body?: unknown): Promise<T> {
   return session.request<T>(path, body);
 }
-async function run(action: () => Promise<void>) {
+async function run(action: () => Promise<void>, isCurrent = () => true) {
   const version = session.version;
   element("notice").textContent = "Working…";
   try {
     await action();
-    if (version === session.version)
+    if (version === session.version && isCurrent())
       element("notice").textContent =
         "Updated. Configuration observations are not connectivity measurements.";
   } catch (error) {
-    if (version === session.version)
+    if (version === session.version && isCurrent())
       element("notice").textContent = error instanceof Error ? error.message : "Request failed";
   }
 }
@@ -86,12 +90,12 @@ function button(
   if (writes) node.dataset.write = "";
   node.disabled = writes && !isAdmin();
   node.onclick = () => {
-    if (!isCurrent()) return;
+    if (node.disabled || !isCurrent()) return;
     const version = session.version;
     node.disabled = true;
     node.dataset.pending = "";
-    void run(action).finally(() => {
-      if (version === session.version) {
+    void run(action, isCurrent).finally(() => {
+      if (version === session.version && isCurrent()) {
         node.disabled = writes && !isAdmin();
         delete node.dataset.pending;
       }
@@ -153,7 +157,8 @@ function renderPlans(plans: Plan[]) {
           "Apply reviewed plan",
           async () => {
             const body: ApplyPlan = { fault: element<HTMLSelectElement>("fault").value as Fault };
-            await request<Operation>(`/plans/${plan.id}/apply`, body);
+            const operation = await request<Operation>(`/plans/${plan.id}/apply`, body);
+            selectedOperationId = operation.id;
             await refresh();
             navigation.navigate("operations");
           },
@@ -163,41 +168,90 @@ function renderPlans(plans: Plan[]) {
     }),
   );
 }
+function clearOperationEvidence() {
+  element("observation").replaceChildren();
+  element("operation-events").replaceChildren();
+  element("operation-events-details").removeAttribute("open");
+}
 function renderOperations(operations: Operation[]) {
+  const version = ++operationViewVersion;
+  if (selectedOperationId === undefined) selectedOperationId = operations[0]?.id;
+  clearOperationEvidence();
+  const isCurrent = () =>
+    version === operationViewVersion &&
+    app?.isConnected === true &&
+    !!snapshot &&
+    !element("operations").hidden;
+  function action(label: string, execute: (current: () => boolean) => Promise<void>, writes = false) {
+    return button(
+      label,
+      async () => {
+        const generation = session.version;
+        const current = () => isCurrent() && generation === session.version;
+        // One active detail action per view; navigation retires, not cancels remote work.
+        for (const control of document.querySelectorAll<HTMLButtonElement>(
+          "#operation-list [data-operation-action]",
+        )) {
+          control.disabled = true;
+          control.dataset.pending = "";
+        }
+        clearOperationEvidence();
+        try {
+          await execute(current);
+        } finally {
+          if (current())
+            for (const control of document.querySelectorAll<HTMLButtonElement>(
+              "#operation-list [data-operation-action]",
+            )) {
+              control.disabled = control.hasAttribute("data-write") && !isAdmin();
+              delete control.dataset.pending;
+            }
+        }
+      },
+      writes,
+      isCurrent,
+    );
+  }
   element("operation-list").replaceChildren(
-    ...operations.map((operation) => {
-      const card = document.createElement("article");
-      const total = snapshot?.plans.find((p) => p.id === operation.plan_id)?.actions.length ?? operation.step;
-      card.append(
-        text("h3", operationLabel(operation.status, operation.step, total)),
-        text("p", `${operation.id} · retries for current step: ${operation.attempts}`),
-      );
-      if (operation.error) card.append(text("p", operation.error));
-      card.append(
-        button("Inspect result & step events", async () => {
+    renderOperationReview(operations, snapshot?.plans ?? [], {
+      selectedOperationId,
+      isCurrent,
+      onSelect: (id) => {
+        if (!isCurrent()) return;
+        session.retireRequests();
+        element("notice").replaceChildren();
+        selectedOperationId = id;
+        renderOperations(operations);
+        element("operation-selection").focus();
+      },
+      makeInspect: (operation) =>
+        action("Inspect result & step events", async (current) => {
           const value = await request<Observation>(`/operations/${operation.id}/observation`);
+          if (!current()) return;
+          if (value.operation_id !== operation.id)
+            throw new Error("Observation did not match selected operation");
+          const events = await request(`/operations/${operation.id}/events`);
+          if (!current()) return;
           element("observation").replaceChildren(renderObservation(value));
-          element("operation-events").textContent = JSON.stringify(
-            await request(`/operations/${operation.id}/events`),
-            null,
-            2,
-          );
+          element("operation-events").textContent = JSON.stringify(events, null, 2);
         }),
-      );
-      if (snapshot?.mode === "demo" && ["succeeded", "partial", "failed"].includes(operation.status))
-        card.append(
-          button(
-            "Simulate external drift",
-            async () => {
-              await request(`/operations/${operation.id}/demo-drift`, {});
-              element("observation").replaceChildren(
-                renderObservation(await request<Observation>(`/operations/${operation.id}/observation`)),
-              );
-            },
-            true,
-          ),
-        );
-      return card;
+      makeDrift:
+        snapshot?.mode === "demo"
+          ? (operation) =>
+              action(
+                "Simulate external drift",
+                async (current) => {
+                  await request(`/operations/${operation.id}/demo-drift`, {});
+                  if (!current()) return;
+                  const value = await request<Observation>(`/operations/${operation.id}/observation`);
+                  if (!current()) return;
+                  if (value.operation_id !== operation.id)
+                    throw new Error("Observation did not match selected operation");
+                  element("observation").replaceChildren(renderObservation(value));
+                },
+                true,
+              )
+          : undefined,
     }),
   );
 }
@@ -434,6 +488,9 @@ element<HTMLFormElement>("login").onsubmit = (event) => {
   void run(refresh);
 };
 function clearSession() {
+  selectedOperationId = undefined;
+  ++operationViewVersion;
+  clearOperationEvidence();
   selectedPlanId = undefined;
   ++planViewVersion;
   connectionStep(false);

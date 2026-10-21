@@ -149,13 +149,69 @@ test("real browser: register, discover, plan, apply, observe drift and partial f
   const secondOperation = await secondApplyResponse.json();
   expect(typeof secondOperation.id).toBe("string");
   operation = page.locator("#operation-list article").filter({ hasText: secondOperation.id });
+  let operationSnapshot: Snapshot | undefined;
   await expect
     .poll(async () => {
+      const refreshed = page.waitForResponse(
+        (r) => r.request().method() === "GET" && new URL(r.url()).pathname === "/api/v1/snapshot",
+      );
       await page.getByRole("button", { name: "Refresh", exact: true }).click();
+      operationSnapshot = (await (await refreshed).json()) as Snapshot;
       return operation.textContent();
     })
     .toContain("Partial completion");
   await expect(operation).toContainText("Conflicting manual NAT route");
+  await expect(page).toHaveURL(/#\/operations$/);
+  await expect(page.locator("#operation-list article")).toHaveCount(1);
+  if (!operationSnapshot) throw new Error("Missing refreshed operation history");
+  const operationIds = operationSnapshot.operations.map((value) => value.id);
+  expect(operationIds).toContain(firstOperation.id);
+  expect(operationIds).toContain(secondOperation.id);
+  const operationSelection = page.getByLabel("Operation to inspect", { exact: true });
+  await expect(operationSelection.locator("option")).toHaveCount(operationIds.length);
+  expect(
+    await operationSelection
+      .locator("option")
+      .evaluateAll((options) => options.map((o) => (o as HTMLOptionElement).value)),
+  ).toEqual(operationIds);
+  const localOperationSelectionCalls: string[] = [];
+  page.on("request", (r) => localOperationSelectionCalls.push(r.url()));
+  await operationSelection.selectOption(firstOperation.id);
+  await expect(page.locator("#operation-list article")).toHaveAttribute(
+    "data-operation-id",
+    firstOperation.id,
+  );
+  await operationSelection.selectOption(secondOperation.id);
+  await expect(page.locator("#operation-list article")).toHaveAttribute(
+    "data-operation-id",
+    secondOperation.id,
+  );
+  expect(localOperationSelectionCalls).toEqual([]);
+  const observed = page.waitForResponse(
+    (r) => new URL(r.url()).pathname === `/api/v1/operations/${secondOperation.id}/observation`,
+  );
+  const eventResponse = page.waitForResponse(
+    (r) => new URL(r.url()).pathname === `/api/v1/operations/${secondOperation.id}/events`,
+  );
+  await operation.getByRole("button", { name: "Inspect result & step events" }).click();
+  const observedBody = await (await observed).json();
+  const eventBody = await (await eventResponse).json();
+  expect(observedBody.operation_id).toBe(secondOperation.id);
+  await expect(page.locator("#observation")).toContainText(observedBody.configuration);
+  await expect(page.locator("#observation")).toContainText("Not tested");
+  await page.getByText("Technical step events for the selected operation", { exact: true }).click();
+  expect(JSON.parse(await page.locator("#operation-events").innerText())).toEqual(eventBody);
+  await page.getByText("Technical step events for the selected operation", { exact: true }).click();
+  await page.getByText("Technical operation identifiers & persisted state", { exact: true }).click();
+  expect(JSON.parse(await page.locator("#operation-list details pre").innerText())).toEqual(
+    operationSnapshot.operations.find((value) => value.id === secondOperation.id),
+  );
+  await page.getByText("Technical operation identifiers & persisted state", { exact: true }).click();
+  await page.evaluate(() => window.scrollTo(0, 0));
+  await page.screenshot({ path: testInfo.outputPath("selected-operation-review.png"), fullPage: true });
+  await page.setViewportSize({ width: 390, height: 844 });
+  expect(await page.evaluate(() => document.documentElement.scrollWidth <= window.innerWidth)).toBe(true);
+  await page.screenshot({ path: testInfo.outputPath("selected-operation-mobile.png"), fullPage: true });
   await page.getByRole("button", { name: "Sign out" }).click();
   await expect(page.locator("#workspace")).toBeHidden();
   await expect(page.locator("#account-list")).toBeEmpty();
