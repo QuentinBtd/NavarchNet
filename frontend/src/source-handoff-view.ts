@@ -12,6 +12,7 @@ import type {
 } from "./generated";
 import type { NatReferenceParent } from "./nat-reference-view";
 import { renderSourceAttachmentEntry, type SourceVpcContext } from "./source-attachment-entry-view";
+import { renderSourceCidr, type SavedSourceCidr, type SourceCidrContext } from "./source-cidr-view";
 import { renderTargetEntries } from "./target-entries-view";
 import { text } from "./view";
 
@@ -93,6 +94,8 @@ export function renderSourceHandoff(
     isCurrent?: () => boolean;
     lookupNatReference?: SavedNetworkNatReferenceLookup;
     sourceVpc?: SourceVpcContext;
+    lookupCidr?: SavedSourceCidr;
+    sourceCidr?: SourceCidrContext;
   } = {},
 ): HTMLFormElement {
   accounts = accounts.map((account) => ({ ...account }));
@@ -302,5 +305,18 @@ export function renderSourceHandoff(
       }
     })();
   };
+  if (options.lookupCidr && options.sourceCidr)
+    form.append(
+      renderSourceCidr(
+        options.sourceCidr,
+        subnetId,
+        index,
+        form,
+        network,
+        options.lookupCidr,
+        upstreamCurrent,
+        accounts,
+      ),
+    );
   return form;
 }

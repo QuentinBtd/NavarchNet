@@ -77,3 +77,19 @@ export type SubnetRouteTable = { subnet_id: string, vpc_id: string | null, selec
 export type RouteTableSelection = { "status": "selected", route_table_id: string, source: AssociationSource, } | { "status": "unresolved", reason: RouteSelectionReason, };
 export type RouteSelectionReason = "incomplete_observation" | "duplicate_subnet" | "missing_vpc" | "unverified_owner" | "missing_route_table" | "ambiguous_association" | "association_not_ready" | "wrong_vpc";
 export type AssociationSource = "explicit_subnet" | "implicit_main";
+export type SavedObservation = { registration: VerifiedAccount, saved_row_id: string, generation: number, topology: AwsTopology,
+/**
+ * Charge this against any remaining multi-read text allowance. Not a response-byte count.
+ */
+admitted_bytes: number, };
+export type SourceHandoffCidrQuery = { source_account_id: string, network_account_id: string, subnet_id: string, destination_cidr: string, };
+export type CutPredicate = { "kind": "query" } | { "kind": "source_vpc_route", resource_index: number, route_index: number, } | { "kind": "network_tgw_route", resource_index: number, route_index: number, } | { "kind": "vpc_service", policy_index: number, };
+export type CutEdge = "query_start" | "enter" | "leave";
+export type CutOrigin = {
+/**
+ * Index of the segment START at this transition. Coincident raw origins are all retained.
+ */
+cut_index: number, predicate: CutPredicate, edge: CutEdge, clipped: boolean, };
+export type SourceHandoffDecisionInterval = { start: string, end_inclusive: string, result: SourceHandoffLookup, };
+export type SourceHandoffCidrEnvelope<Q, S, N, O, C> = { query: Q, source_saved: S, network_saved: N, origins: O, segments: C, reference_only: boolean, partition_complete: boolean, execution_enabled: boolean, connectivity_tested: boolean, simultaneous_snapshots: boolean, };
+export type SourceHandoffCidrCoverage = SourceHandoffCidrEnvelope<SourceHandoffCidrQuery, SavedObservation, SavedObservation, Array<CutOrigin>, Array<SourceHandoffDecisionInterval>>;

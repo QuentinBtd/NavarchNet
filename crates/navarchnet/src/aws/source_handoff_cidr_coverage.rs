@@ -8,9 +8,10 @@ use super::{
 use ipnet::IpNet;
 use serde::{Deserialize, Serialize};
 use std::net::{IpAddr, Ipv4Addr, Ipv6Addr};
+use ts_rs::TS;
 mod admission;
 
-#[derive(Debug, Clone, Serialize, Deserialize)]
+#[derive(Debug, Clone, Serialize, Deserialize, TS)]
 #[serde(deny_unknown_fields)]
 pub struct SourceHandoffCidrQuery {
     pub source_account_id: String,
@@ -86,7 +87,7 @@ impl Default for SourceHandoffCidrBudget {
         }
     }
 }
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, TS)]
 #[serde(tag = "kind", rename_all = "snake_case")]
 pub enum CutPredicate {
     Query,
@@ -102,14 +103,14 @@ pub enum CutPredicate {
         policy_index: usize,
     },
 }
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, TS)]
 #[serde(rename_all = "snake_case")]
 pub enum CutEdge {
     QueryStart,
     Enter,
     Leave,
 }
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, TS)]
 pub struct CutOrigin {
     /// Index of the segment START at this transition. Coincident raw origins are all retained.
     pub cut_index: usize,
@@ -117,14 +118,14 @@ pub struct CutOrigin {
     pub edge: CutEdge,
     pub clipped: bool,
 }
-#[derive(Debug, Serialize)]
+#[derive(Debug, Serialize, TS)]
 pub struct SourceHandoffDecisionInterval {
     pub start: String,
     pub end_inclusive: String,
     pub result: SourceHandoffLookup,
 }
 /// The same serialized shape serves borrowed previews and owned results. No late response wrapper.
-#[derive(Debug, Serialize)]
+#[derive(Debug, Serialize, TS)]
 pub struct SourceHandoffCidrEnvelope<Q, S, N, O, C> {
     pub query: Q,
     pub source_saved: S,

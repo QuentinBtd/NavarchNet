@@ -1,6 +1,7 @@
 import type { AdoptionConsent, TopologyView, VerifiedAccount } from "./generated";
 import { renderNatMetadata } from "./nat-metadata-view";
 import type { SavedNatReferenceLookup } from "./nat-reference-view";
+import { captureSourceCidrContext, type SavedSourceCidr } from "./source-cidr-view";
 import {
   renderSourceHandoff,
   type SavedNetworkNatReferenceLookup,
@@ -22,6 +23,7 @@ export function renderAwsTopology(
     onNatReferenceLookup?: SavedNatReferenceLookup;
     isCurrent?: () => boolean;
     onSourceLookup?: SavedSourceHandoff;
+    onSourceCidrCoverage?: SavedSourceCidr;
     onTargetLookup?: SavedNetworkTargetLookup;
     onNetworkNatReferenceLookup?: SavedNetworkNatReferenceLookup;
     networkAccounts?: VerifiedAccount[];
@@ -29,6 +31,8 @@ export function renderAwsTopology(
 ): HTMLElement {
   const root = document.createElement("section");
   const topology = view.topology;
+  const sourceCidr = options.onSourceCidrCoverage ? captureSourceCidrContext(topology) : undefined;
+  const networkAccounts = options.networkAccounts?.map((account) => ({ ...account }));
   const tableSelections = new Map(
     view.subnet_route_tables.map((value) => [value.subnet_id, value.selection]),
   );
@@ -126,7 +130,7 @@ export function renderAwsTopology(
           detail.append(text("summary", "Inspect saved source-to-TGW candidate"));
           // Construct account choices only when opened, not 500 options on every subnet card.
           detail.ontoggle = () => {
-            if (options.isCurrent && !options.isCurrent()) return;
+            if ((options.isCurrent && !options.isCurrent()) || !root.contains(detail)) return;
             if (detail.open && !detail.querySelector("form"))
               detail.append(
                 renderSourceHandoff(
@@ -134,11 +138,13 @@ export function renderAwsTopology(
                   resource.id,
                   selection,
                   index,
-                  options.networkAccounts ?? [],
+                  networkAccounts ?? [],
                   lookup,
                   options.onTargetLookup,
                   {
-                    isCurrent: options.isCurrent,
+                    isCurrent: () => (!options.isCurrent || options.isCurrent()) && root.contains(detail),
+                    lookupCidr: options.onSourceCidrCoverage,
+                    sourceCidr,
                     lookupNatReference: options.onNetworkNatReferenceLookup,
                     sourceVpc: options.onVpcLookup
                       ? {

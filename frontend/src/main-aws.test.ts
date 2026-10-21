@@ -2,6 +2,7 @@ import { afterEach, expect, it, vi } from "vitest";
 import type {
   NatReferenceResponse,
   Snapshot,
+  SourceHandoffCidrCoverage,
   TgwLookupResponse,
   TgwSourceResponse,
   TgwTargetResponse,
@@ -990,6 +991,130 @@ it("cross-account NAT requests stay bound to B under A and retire across parent 
       document.body.replaceChildren();
     }
 }, 15_000);
+function sourceCidrReply(): SourceHandoffCidrCoverage {
+  const source = vpcTopology("account-a").topology,
+    network = vpcTopology("account-b").topology;
+  network.completed_at = "4";
+  return {
+    query: {
+      source_account_id: "account-a",
+      network_account_id: "account-b",
+      subnet_id: "subnet-account-a",
+      destination_cidr: "203.0.113.0/29",
+    },
+    source_saved: {
+      registration: account("account-a"),
+      saved_row_id: source.id,
+      generation: 1,
+      admitted_bytes: 0,
+      topology: source,
+    },
+    network_saved: {
+      registration: account("account-b"),
+      saved_row_id: network.id,
+      generation: 2,
+      admitted_bytes: 0,
+      topology: network,
+    },
+    segments: [
+      {
+        start: "203.0.113.0",
+        end_inclusive: "203.0.113.7",
+        result: {
+          source: { status: "unresolved", reason: "missing_subnet" },
+          handoff: { status: "unresolved", reason: "missing_source_scope" },
+        },
+      },
+    ],
+    origins: [{ cut_index: 0, predicate: { kind: "query" }, edge: "query_start", clipped: false }],
+    reference_only: true,
+    partition_complete: true,
+    execution_enabled: false,
+    connectivity_tested: false,
+    simultaneous_snapshots: false,
+  };
+}
+it("source CIDR main integration uses only the selected SOURCE GET and fences accepted retained controls plus late success/error across view/session retirement", async () => {
+  for (const retirement of ["switch", "ABA", "reload", "logout", "login", "discovery"])
+    for (const failed of [false, true]) {
+      const pending = deferred(),
+        discovery = deferred(),
+        paths: string[] = [];
+      let reads = 0;
+      await boot(
+        async (path) => {
+          paths.push(path);
+          if (path.endsWith("/discover")) return discovery.promise;
+          if (path.includes("tgw-source-cidr-coverage?"))
+            return ++reads === 1 ? response(sourceCidrReply()) : pending.promise;
+          return response(vpcTopology(path.includes("account-a") ? "account-a" : "account-b"));
+        },
+        retirement === "discovery" ? { ...snapshot, role: "admin", aws_read_only_enabled: true } : snapshot,
+      );
+      select("account-a");
+      await vi.waitFor(() => expect(document.querySelector("#aws-topology article")).not.toBeNull());
+      const parent = required(
+        [...document.querySelectorAll<HTMLDetailsElement>("#aws-topology details")].find(
+          (d) => d.querySelector(":scope > summary")?.textContent === "Inspect saved source-to-TGW candidate",
+        ),
+      );
+      parent.open = true;
+      parent.dispatchEvent(new Event("toggle"));
+      const form = required(parent.querySelector("form"));
+      required(form.querySelector("select")).value = "account-b";
+      const detail = form.querySelector<HTMLDetailsElement>("[data-source-cidr]");
+      expect(detail).not.toBeNull();
+      if (!detail) throw new Error("Missing CIDR sibling");
+      detail.open = true;
+      detail.dispatchEvent(new Event("toggle"));
+      const input = required(detail.querySelector("input")),
+        action = required(detail.querySelector("button"));
+      input.value = "203.0.113.0/29";
+      action.click();
+      await vi.waitFor(() => expect(detail.querySelector("[data-source-cidr-summary]")).not.toBeNull());
+      expect(paths).toEqual([
+        "/api/v1/aws/accounts/account-a/topology",
+        "/api/v1/aws/accounts/account-a/tgw-source-cidr-coverage?network_account_id=account-b&subnet_id=subnet-account-a&destination_cidr=203.0.113.0%2F29",
+      ]);
+      const retained = required(detail.querySelector<HTMLDetailsElement>("[data-source-cidr-intervals]"));
+      action.click();
+      expect(reads).toBe(2);
+      if (retirement === "switch" || retirement === "ABA") select("account-b");
+      if (retirement === "ABA" || retirement === "reload") select("account-a");
+      if (retirement === "logout" || retirement === "login")
+        required(document.querySelector<HTMLButtonElement>("#logout")).click();
+      if (retirement === "login") {
+        required(document.querySelector<HTMLInputElement>("#token")).value = "new-fixture-reader";
+        required(document.querySelector("#login")).dispatchEvent(new Event("submit", { cancelable: true }));
+      }
+      if (retirement === "discovery")
+        required(
+          [...document.querySelectorAll<HTMLButtonElement>("#aws-account-list li:first-child button")][1],
+        ).click();
+      retained.open = true;
+      retained.dispatchEvent(new Event("toggle"));
+      expect(retained.querySelector("[data-source-cidr-interval]")).toBeNull();
+      action.disabled = false;
+      action.click();
+      expect(reads).toBe(2);
+      pending.resolve(
+        failed
+          ? new Response(JSON.stringify({ error: "obsolete CIDR failure" }), { status: 500 })
+          : response(sourceCidrReply()),
+      );
+      await new Promise((done) => setTimeout(done, 0));
+      expect(detail.querySelector("[data-source-cidr-summary]")).toBeNull();
+      expect(required(document.querySelector("#aws-topology")).textContent).not.toContain(
+        "obsolete CIDR failure",
+      );
+      if (retirement === "discovery") {
+        discovery.resolve(response({}));
+        await new Promise((done) => setTimeout(done, 0));
+      }
+      vi.unstubAllGlobals();
+      document.body.replaceChildren();
+    }
+}, 15_000);
 it("late account topology cannot replace a newer selected account", async () => {
   const old = deferred();
   await boot(async (path) => (path.includes("account-a") ? old.promise : response(topology("account-b"))));
@@ -1036,3 +1161,8 @@ it("logout clears saved lookup and discards its response even when fetch ignores
   expect(document.querySelector("#identity")?.textContent).toBe("Signed out");
   expect(document.querySelector<HTMLElement>("#workspace")?.hidden).toBe(true);
 });
+
+function required<T>(value: T | null | undefined): T {
+  if (value === null || value === undefined) throw new Error("Missing test fixture/control");
+  return value;
+}

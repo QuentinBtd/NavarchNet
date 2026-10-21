@@ -4,6 +4,7 @@ use crate::store::Store;
 use serde::Serialize;
 use sqlx::Row;
 use std::fmt;
+use ts_rs::TS;
 
 /// Trusted local admission limits, not HTTP options, memory limits or query deadlines.
 #[derive(Debug, Clone, Copy)]
@@ -40,10 +41,11 @@ impl fmt::Display for SavedObservationReadError {
     }
 }
 impl std::error::Error for SavedObservationReadError {}
-#[derive(Debug, Serialize)]
+#[derive(Debug, Serialize, TS)]
 pub struct SavedObservation {
     pub registration: VerifiedAccount,
     pub saved_row_id: String,
+    #[ts(type = "number")]
     pub generation: i64,
     pub topology: AwsTopology,
     /// Charge this against any remaining multi-read text allowance. Not a response-byte count.

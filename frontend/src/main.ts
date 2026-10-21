@@ -12,6 +12,7 @@ import type {
   RegisterAccount,
   RoleRegistration,
   Snapshot,
+  SourceHandoffCidrCoverage,
   TgwLookupResponse,
   TgwSourceResponse,
   TgwTargetResponse,
@@ -227,6 +228,20 @@ async function loadAwsTopology(id: string) {
           const parameters = new URLSearchParams(query);
           const result = await request<TgwLookupResponse>(
             `/aws/accounts/${encodeURIComponent(id)}/tgw-route-lookup?${parameters}`,
+          );
+          if (version !== awsViewVersion || selectedAwsAccountId !== id) return;
+          return result;
+        } catch (error) {
+          if (version !== awsViewVersion || selectedAwsAccountId !== id) return;
+          throw error;
+        }
+      },
+      onSourceCidrCoverage: async (query) => {
+        if (version !== awsViewVersion || selectedAwsAccountId !== id) return;
+        try {
+          const parameters = new URLSearchParams(query);
+          const result = await request<SourceHandoffCidrCoverage>(
+            `/aws/accounts/${encodeURIComponent(id)}/tgw-source-cidr-coverage?${parameters}`,
           );
           if (version !== awsViewVersion || selectedAwsAccountId !== id) return;
           return result;

@@ -50,6 +50,12 @@ Saved VPC and per-table TGW lookup lifecycle regressions exercise the older form
 
 ## What tests establish
 
+### Independent saved source-to-TGW CIDR operator
+
+`saved-source-cidr-coverage.spec.ts` first checks the real protected API and both immutable saved captures with SDK off, then executed a genuine absent-control RED (one expected, zero found). GREEN uses the current production executable/static frontend/isolated PostgreSQL without response mocks: independent blank/lazy controls, explicit source URL and three-field query, exact backend envelope, both saved identities, deferred interval rows, Enter/native-parent validity, independent point submission, logout and unchanged saved/snapshot readbacks. This is a saved-decision display, not cloud connectivity or a new routing proof.
+
+Renderer/main fixtures check whole-response identity/markers/nested nullable shapes and malformed tails before summary, safe integer generations, original origin indexes and candidate binding, owned accepted data, inert unknown strings, recursive complete 101-entry batching, input/network/parent resubmits/ABA, ignored-abort late success/error/finally, eventless invalid retry and retained controls after account/session/resource-page retirement. Structural repeated-cell fixtures do not prove partition arithmetic. Two final sparse resource/NAT-address cases genuinely failed before replacing the shared new-contract array predicate with own-index traversal; JSON itself cannot contain holes. Generated-contract tests separately check the concrete generic alias and JSON-number generation, and preserve documented declarations without trailing whitespace. Parent frontend regression passes 157 tests; the focused new real Chromium journey passes. Whole composed qualification and exact independent source approval remain separate requirements.
+
 ### Saved source-to-TGW CIDR reader API
 
 The existing real PostgreSQL/router source tracer first executed a missing-route 404-versus-200 RED, then GREEN with exact full JSON equality to the independently invoked core. Four additional HTTP/admission tests and two private mapper/remaining-allowance tests are GREEN coverage, not separately reproduced REDs. A closed nonconnecting pool proves auth/extraction/canonical checks precede database use. Unknown/missing/equal-duplicate/encoded-duplicate query fields, forbidden overrides, Unicode control/byte limits, canonical IPv4/IPv6 extrema, reader/admin and fixed redacted error shapes are exercised.
