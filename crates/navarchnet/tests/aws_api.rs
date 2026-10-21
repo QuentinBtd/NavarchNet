@@ -2238,6 +2238,295 @@ async fn saved_source_handoff_binds_two_account_snapshots_and_az_without_writes(
         fingerprint().await?,
         "complete raw tables/catalog remain unchanged by bounded reads, core and HTTP composition"
     );
+    // Additional GREEN acceptance only: all old assertions above precede new immutable generations.
+    use navarchnet::aws::{
+        nat_cidr_reference::{
+            self, NatCidrRecordReference, NatCidrReferenceBudget, NatCidrReferenceQuery,
+        },
+        nat_reference::{self, NatReferenceResult},
+    };
+    let mut prior_parent_capture = serde_json::to_value(&joint.target.network_saved)?;
+    for phase in 0..3 {
+        let mut nat_record = owned(
+            ResourceKind::NatGateway,
+            "nat-unknown-literal",
+            &network_account.aws_account_id,
+        );
+        nat_record.state = Some("failed".into());
+        nat_record.vpc_id = Some("vpc-egress".into());
+        nat_record.availability_mode = Some("regional".into());
+        nat_record.connectivity_type = Some("public".into());
+        nat_record.nat_gateway = Some(NatGatewayMetadata {
+            route_table_id: Some("rtb-unverified-literal".into()),
+            addresses: Some(vec![NatGatewayAddress {
+                allocation_id: None,
+                association_id: None,
+                network_interface_id: None,
+                public_ip: Some("198.51.100.7".into()),
+                private_ip: None,
+                az_name: Some("unverified-zone-name".into()),
+                az_id: None,
+                is_primary: Some(false),
+                status: Some("failed".into()),
+            }]),
+        });
+        assert!(nat_record.subnet_id.is_none());
+        if phase == 1 {
+            nat_record.state = None;
+            nat_record.owner_account_id = Some(source_account.aws_account_id.clone());
+            nat_record.vpc_id = None;
+            nat_record.nat_gateway.as_mut().unwrap().addresses = None;
+        } else if phase == 2 {
+            nat_record.nat_gateway.as_mut().unwrap().addresses = Some(vec![]);
+        }
+        let mut resources = extended_network.resources.clone();
+        resources.push(nat_record);
+        if phase == 2 {
+            // One duplicate identity in another kind is ambiguous, not a preferred NAT record.
+            resources.push(owned(
+                ResourceKind::Vpc,
+                "nat-unknown-literal",
+                &network_account.aws_account_id,
+            ));
+        }
+        let current_network = snapshot(&network_account, resources, &(10 + phase).to_string());
+        let (_, _, generation) = store
+            .begin_aws_discovery("fixture", &network_account.id)
+            .await?;
+        store
+            .finish_aws_discovery("fixture", generation, &current_network)
+            .await?;
+        let raw_nat_before = fingerprint().await?;
+        let source_capture = store
+            .aws_saved_observation_bounded(&source_account.id, budget)
+            .await?;
+        let network_capture = store
+            .aws_saved_observation_bounded(
+                &network_account.id,
+                SavedObservationReadBudget {
+                    total_bytes: budget
+                        .total_bytes
+                        .checked_sub(source_capture.admitted_bytes)
+                        .unwrap(),
+                    ..budget
+                },
+            )
+            .await?;
+        let current_joint = source_target_cidr_reference::analyze(
+            source_capture,
+            network_capture,
+            SourceTargetCidrQuery {
+                source_account_id: source_account.id.clone(),
+                network_account_id: network_account.id.clone(),
+                subnet_id: "subnet-source".into(),
+                transit_gateway_id: "tgw-handoff".into(),
+                target_attachment_id: "tgw-attach-egress".into(),
+                destination_cidr: "203.0.113.0/29".into(),
+            },
+            SourceTargetCidrBudget::default(),
+        )?;
+        let current_parent_capture = serde_json::to_value(&current_joint.target.network_saved)?;
+        assert_eq!(
+            current_parent_capture,
+            serde_json::to_value(&current_joint.source.network_saved)?
+        );
+        assert_eq!(current_joint.source.source_saved.saved_row_id, refreshed.id);
+        assert_eq!(current_joint.source.source_saved.topology.completed_at, "8");
+        assert_eq!(
+            current_joint.target.network_saved.saved_row_id,
+            current_network.id
+        );
+        assert_eq!(current_joint.target.network_saved.generation, generation);
+        assert_eq!(
+            current_joint.target.az_selection,
+            TargetAzSelection::NotInferred
+        );
+        assert!(
+            !current_joint.execution_enabled
+                && !current_joint.connectivity_tested
+                && !current_joint.simultaneous_snapshots
+        );
+        assert_ne!(
+            prior_parent_capture["saved_row_id"],
+            current_parent_capture["saved_row_id"]
+        );
+        assert_ne!(
+            prior_parent_capture["topology"]["completed_at"],
+            current_parent_capture["topology"]["completed_at"]
+        );
+        for subnet in ["subnet-egress-a", "subnet-egress-b"] {
+            // These independent reads are coherent in this fixed fixture generation, not a
+            // production simultaneity guarantee. A caller must compare the complete provenance.
+            let capture = store
+                .aws_saved_observation_bounded(&network_account.id, budget)
+                .await?;
+            assert_eq!(serde_json::to_value(&capture)?, current_parent_capture);
+            let nat = nat_cidr_reference::analyze(
+                capture,
+                NatCidrReferenceQuery {
+                    account_id: network_account.id.clone(),
+                    subnet_id: subnet.into(),
+                    destination_cidr: "203.0.113.0/29".into(),
+                },
+                NatCidrReferenceBudget::default(),
+            )?;
+            assert_eq!(serde_json::to_value(&nat.saved)?, current_parent_capture);
+            assert_ne!(
+                serde_json::to_value(&nat.saved)?,
+                prior_parent_capture,
+                "a newer NAT reply must not be joined to the previous parent just because the registration and route literals still match"
+            );
+            assert_eq!(nat.az_selection, TargetAzSelection::NotInferred);
+            assert!(nat.reference_only && nat.partition_complete);
+            assert!(!nat.execution_enabled && !nat.connectivity_tested);
+            assert_eq!(nat.references.len(), nat.vpc_coverage.segments.len());
+            assert_eq!(
+                nat.references.len(),
+                if subnet == "subnet-egress-a" { 1 } else { 5 }
+            );
+            for host in 0..8 {
+                let ip = format!("203.0.113.{host}");
+                let address = u32::from(ip.parse::<std::net::Ipv4Addr>()?);
+                let contains = |start: &str, end: &str| {
+                    u32::from(start.parse::<std::net::Ipv4Addr>().unwrap()) <= address
+                        && address <= u32::from(end.parse::<std::net::Ipv4Addr>().unwrap())
+                };
+                let parent = current_joint
+                    .segments
+                    .iter()
+                    .filter(|v| contains(&v.start, &v.end_inclusive))
+                    .collect::<Vec<_>>();
+                assert_eq!(parent.len(), 1);
+                assert_eq!(parent[0].selected_reference_matches, host < 2);
+                let target = &current_joint.target.segments[parent[0].target_segment_index];
+                assert_eq!(
+                    target.result,
+                    target_lookup::lookup(
+                        &current_network,
+                        "tgw-handoff",
+                        "tgw-attach-egress",
+                        &ip
+                    )
+                );
+                let TargetVpcLookup::ReportedSubnets { subnets, .. } = &target.result else {
+                    panic!("NAT metadata ambiguity must not discard either target subnet")
+                };
+                assert_eq!(subnets.len(), 2);
+                let target_entry = subnets.iter().find(|v| v.subnet_id == subnet).unwrap();
+                let cells = nat
+                    .vpc_coverage
+                    .segments
+                    .iter()
+                    .enumerate()
+                    .filter(|(_, v)| contains(&v.start, &v.end_inclusive))
+                    .collect::<Vec<_>>();
+                assert_eq!(cells.len(), 1);
+                let (index, cell) = cells[0];
+                assert_eq!(target_entry.lookup, cell.result);
+                let reference = &nat.references[index];
+                assert_eq!(reference.vpc_segment_index, index);
+                let point = nat_reference::lookup(&current_network, subnet, &ip);
+                assert_eq!(point.subnet_lookup, cell.result);
+                let materialized = match &reference.reference {
+                    NatCidrRecordReference::ReportedRecord {
+                        resource_index,
+                        owner_scope,
+                        vpc_scope,
+                    } => {
+                        let row = &nat.saved.topology.resources[*resource_index];
+                        assert_eq!(row.id, "nat-unknown-literal");
+                        assert_eq!(
+                            serde_json::to_value(row)?,
+                            serde_json::to_value(
+                                current_network
+                                    .resources
+                                    .iter()
+                                    .find(|r| r.kind == ResourceKind::NatGateway && r.id == row.id)
+                                    .unwrap()
+                            )?
+                        );
+                        NatReferenceResult::ReportedRecord {
+                            resource: Box::new(row.clone()),
+                            owner_scope: owner_scope.clone(),
+                            vpc_scope: vpc_scope.clone(),
+                        }
+                    }
+                    NatCidrRecordReference::Unresolved { reason } => {
+                        NatReferenceResult::Unresolved {
+                            reason: reason.clone(),
+                        }
+                    }
+                };
+                let value = serde_json::to_value(&materialized)?;
+                assert_eq!(value, serde_json::to_value(point.reference)?);
+                if subnet == "subnet-egress-b" && (host == 1 || host == 5) {
+                    assert_eq!(value["reason"], "no_reported_nat_reference");
+                    assert_eq!(
+                        serde_json::to_value(&cell.result)?["lookup"]["status"],
+                        "reported_blackhole"
+                    );
+                } else if phase == 2 {
+                    assert_eq!(value["reason"], "missing_or_ambiguous_record");
+                } else {
+                    assert_eq!(value["status"], "reported_record");
+                    assert_eq!(
+                        value["owner_scope"],
+                        if phase == 0 {
+                            "reported_same"
+                        } else {
+                            "reported_different"
+                        }
+                    );
+                    assert_eq!(
+                        value["vpc_scope"],
+                        if phase == 0 {
+                            "reported_same"
+                        } else {
+                            "not_reported"
+                        }
+                    );
+                    assert_eq!(
+                        value["resource"]["state"],
+                        if phase == 0 {
+                            json!("failed")
+                        } else {
+                            Value::Null
+                        }
+                    );
+                }
+            }
+            let query = form_urlencoded::Serializer::new(String::new())
+                .append_pair("subnet_id", subnet)
+                .append_pair("destination_cidr", "203.0.113.0/29")
+                .finish();
+            let response = app
+                .clone()
+                .oneshot(
+                    Request::builder()
+                        .uri(format!(
+                            "/api/v1/aws/accounts/{}/nat-cidr-reference?{query}",
+                            network_account.id
+                        ))
+                        .header("authorization", format!("Bearer {reader}"))
+                        .body(Body::empty())?,
+                )
+                .await?;
+            assert_eq!(response.status(), StatusCode::OK);
+            assert_eq!(response.headers()["cache-control"], "no-store");
+            let bytes = to_bytes(
+                response.into_body(),
+                NatCidrReferenceBudget::default().response_bytes,
+            )
+            .await?;
+            assert_eq!(bytes.as_ref(), serde_json::to_vec(&nat)?);
+        }
+        assert_eq!(
+            raw_nat_before,
+            fingerprint().await?,
+            "all raw tables/catalog unchanged after source/target/NAT reads, analysis and real router GETs"
+        );
+        prior_parent_capture = current_parent_capture;
+    }
     Ok(())
 }
 #[tokio::test]
