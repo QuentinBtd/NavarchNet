@@ -94,6 +94,33 @@ async fn latest_saved_reads_are_independent_of_attempts_and_auxiliary_records() 
     assert_eq!(latest.topology.completed_at, "3");
     assert_eq!(read.topology.completed_at, "2");
     assert!(!serde_json::to_string(&latest)?.contains("fixture-private"));
+    // Library-only NAT composition consumes one raw bounded capture, not the private role view.
+    let capture = checked(&store, &account.id, budget).await?;
+    let expected = serde_json::to_value(&capture)?;
+    let result = navarchnet::aws::nat_cidr_reference::analyze(
+        capture,
+        navarchnet::aws::nat_cidr_reference::NatCidrReferenceQuery {
+            account_id: account.id.clone(),
+            subnet_id: "subnet-not-present".into(),
+            destination_cidr: "192.0.2.0/29".into(),
+        },
+        navarchnet::aws::nat_cidr_reference::NatCidrReferenceBudget::default(),
+    )?;
+    assert_eq!(serde_json::to_value(&result.saved)?, expected);
+    assert_eq!(result.references.len(), 1);
+    assert_eq!(result.references[0].vpc_segment_index, 0);
+    assert_eq!(
+        serde_json::to_value(&result.references[0].reference)?,
+        json!({
+            "status": "unresolved", "reason": "no_reported_nat_reference"
+        })
+    );
+    assert!(result.partition_complete && result.reference_only);
+    assert!(!result.execution_enabled && !result.connectivity_tested);
+    assert_eq!(
+        serde_json::to_value(checked(&store, &account.id, budget).await?)?,
+        expected
+    );
     Ok(())
 }
 #[tokio::test]

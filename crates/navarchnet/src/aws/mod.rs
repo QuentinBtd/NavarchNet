@@ -3,6 +3,9 @@ mod attachment_subnets;
 mod cidr_partition;
 pub mod ec2;
 pub mod ingress_lookup;
+pub mod nat_cidr_reference;
+#[cfg(test)]
+mod nat_cidr_reference_tests;
 pub mod nat_reference;
 pub mod observation;
 pub mod persistence;
