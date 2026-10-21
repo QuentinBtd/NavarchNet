@@ -205,14 +205,15 @@ footer {
   min-height: 75vh;
 }
 .sidebar {
+  position: sticky;
+  top: 0.5rem;
+  align-self: start;
   border-right: 1px solid #293547;
   padding-right: 1rem;
 }
 .sidebar nav {
   display: grid;
   gap: 0.25rem;
-  position: sticky;
-  top: 0.5rem;
 }
 .sidebar a {
   padding: 0.55rem 0.7rem;
@@ -282,6 +283,7 @@ summary {
     gap: 0.5rem;
   }
   .sidebar {
+    position: static;
     border-right: 0;
     border-bottom: 1px solid #293547;
     padding-right: 0;

@@ -43,7 +43,11 @@ test("real browser: register, discover, plan, apply, observe drift and partial f
   await page.getByRole("button", { name: "Configure connection", exact: true }).click();
   await expect(page.locator("#connection-select")).toBeHidden();
   await page.getByLabel("Regional egress network").selectOption(networkId);
+  const firstCreated = page.waitForResponse(
+    (r) => r.request().method() === "POST" && new URL(r.url()).pathname === "/api/v1/plans",
+  );
   await page.getByRole("button", { name: "Generate immutable change plan" }).click();
+  const firstSaved = await (await firstCreated).json();
   const plan = page.locator("#plan-list article").first();
   await expect(plan).toContainText(vpc);
   await expect(plan).toContainText("return_route");
@@ -68,13 +72,52 @@ test("real browser: register, discover, plan, apply, observe drift and partial f
     .getByRole("navigation", { name: "Workspace" })
     .getByRole("link", { name: "Connections / plans", exact: true })
     .click();
+  const secondCreated = page.waitForResponse(
+    (r) => r.request().method() === "POST" && new URL(r.url()).pathname === "/api/v1/plans",
+  );
   await page.getByRole("button", { name: "Generate immutable change plan" }).click();
+  const secondSaved = await (await secondCreated).json();
+  await expect(page).toHaveURL(/#\/plans$/);
+  await expect(page.locator("#plan-list article")).toHaveCount(1);
+  await expect(page.locator("#plan-list article")).toHaveAttribute("data-plan-id", secondSaved.id);
+  const selection = page.getByLabel("Plan to review", { exact: true });
+  await expect(selection.locator("option")).toHaveCount(2);
+  const selectionCalls: string[] = [];
+  page.on("request", (r) => selectionCalls.push(r.url()));
+  await selection.selectOption(firstSaved.id);
+  await expect(page.locator("#plan-list article")).toHaveAttribute("data-plan-id", firstSaved.id);
+  await expect(page.locator("#plan-list details")).not.toHaveAttribute("open");
+  await page.getByText("Technical plan identifiers & original evidence", { exact: true }).click();
+  expect(JSON.parse(await page.locator("#plan-list details pre").innerText())).toEqual(firstSaved);
+  await selection.selectOption(secondSaved.id);
+  await expect(page.locator("#plan-list article")).toHaveAttribute("data-plan-id", secondSaved.id);
+  expect(selectionCalls).toEqual([]);
+  await page.setViewportSize({ width: 390, height: 844 });
+  expect(await page.evaluate(() => document.documentElement.scrollWidth <= window.innerWidth)).toBe(true);
+  await page.screenshot({ path: testInfo.outputPath("selected-plan-mobile.png"), fullPage: true });
+  await page.setViewportSize({ width: 1440, height: 900 });
+  expect(
+    await page.evaluate(() => {
+      const navigation = document.querySelector(".sidebar nav");
+      const mode = document.querySelector(".mode-status");
+      if (!navigation || !mode) throw new Error("Missing navigation/mode status");
+      return navigation.getBoundingClientRect().bottom <= mode.getBoundingClientRect().top;
+    }),
+  ).toBe(true);
+  await page.evaluate(() => window.scrollTo(0, 0));
+  await page.screenshot({ path: testInfo.outputPath("selected-plan-review.png"), fullPage: true });
   await page.getByLabel("Demo execution scenario").selectOption("partial_failure");
+  const applied = page.waitForRequest(
+    (r) => r.method() === "POST" && new URL(r.url()).pathname.endsWith("/apply"),
+  );
   await page
     .locator("#plan-list article")
     .first()
     .getByRole("button", { name: "Apply reviewed plan" })
     .click();
+  const appliedRequest = await applied;
+  expect(new URL(appliedRequest.url()).pathname).toBe(`/api/v1/plans/${secondSaved.id}/apply`);
+  expect(appliedRequest.postDataJSON()).toEqual({ fault: "partial_failure" });
   await expect
     .poll(async () => {
       await page.getByRole("button", { name: "Refresh", exact: true }).click();

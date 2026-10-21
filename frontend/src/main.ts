@@ -23,6 +23,7 @@ import type {
   VpcLookupResponse,
 } from "./generated";
 import { createNavigation } from "./navigation";
+import { renderPlanReview } from "./plan-review-view";
 import { Session } from "./session";
 import { operationLabel, renderObservation, text } from "./view";
 import "./style.css";
@@ -40,6 +41,8 @@ const session = new Session();
 let snapshot: Snapshot | undefined;
 let selectedAwsAccountId: string | undefined;
 let awsViewVersion = 0;
+let selectedPlanId: string | undefined;
+let planViewVersion = 0;
 const navigation = createNavigation(app, () => {
   session.retireRequests();
   ++awsViewVersion;
@@ -72,12 +75,18 @@ async function run(action: () => Promise<void>) {
       element("notice").textContent = error instanceof Error ? error.message : "Request failed";
   }
 }
-function button(label: string, action: () => Promise<void>, writes = false): HTMLButtonElement {
+function button(
+  label: string,
+  action: () => Promise<void>,
+  writes = false,
+  isCurrent = () => true,
+): HTMLButtonElement {
   const node = text("button", label);
   node.type = "button";
   if (writes) node.dataset.write = "";
   node.disabled = writes && !isAdmin();
   node.onclick = () => {
+    if (!isCurrent()) return;
     const version = session.version;
     node.disabled = true;
     node.dataset.pending = "";
@@ -124,26 +133,22 @@ function renderSubnets() {
   );
 }
 function renderPlans(plans: Plan[]) {
+  const version = ++planViewVersion;
+  const isCurrent = () =>
+    version === planViewVersion && app?.isConnected === true && !!snapshot && !element("plans").hidden;
   element("plan-list").replaceChildren(
-    ...plans.map((plan) => {
-      const card = document.createElement("article");
-      card.append(
-        text("h3", `Plan ${plan.id.slice(0, 8)} · ${plan.actions.length} actions`),
-        text(
-          "p",
-          `Impact: ${plan.request.vpc_id}; ${plan.request.subnet_ids.length} subnets. Immutable digest: ${plan.digest}`,
-        ),
-      );
-      const list = document.createElement("ol");
-      for (const action of plan.actions)
-        list.append(
-          text(
-            "li",
-            `${action.kind} → ${action.target}. Requires steps: ${action.requires.map((i) => i + 1).join(", ") || "none"}. Verify: ${action.postcondition}`,
-          ),
-        );
-      card.append(
-        list,
+    renderPlanReview(plans, {
+      selectedPlanId,
+      isCurrent,
+      onSelect: (id) => {
+        if (!isCurrent()) return;
+        session.retireRequests();
+        element("notice").replaceChildren();
+        selectedPlanId = id;
+        renderPlans(plans);
+        element("plan-selection").focus();
+      },
+      makeApply: (plan) =>
         button(
           "Apply reviewed plan",
           async () => {
@@ -153,9 +158,8 @@ function renderPlans(plans: Plan[]) {
             navigation.navigate("operations");
           },
           true,
+          isCurrent,
         ),
-      );
-      return card;
     }),
   );
 }
@@ -430,6 +434,8 @@ element<HTMLFormElement>("login").onsubmit = (event) => {
   void run(refresh);
 };
 function clearSession() {
+  selectedPlanId = undefined;
+  ++planViewVersion;
   connectionStep(false);
   element<HTMLFormElement>("aws-register").reset();
   element("aws-register").hidden = true;
@@ -530,7 +536,8 @@ element<HTMLFormElement>("plan-form").onsubmit = (event) => {
       network_id: element<HTMLSelectElement>("network").value,
       allow_application_traffic: false,
     };
-    await request<Plan>("/plans", body);
+    const plan = await request<Plan>("/plans", body);
+    selectedPlanId = plan.id;
     await refresh();
     navigation.navigate("plans");
   });
