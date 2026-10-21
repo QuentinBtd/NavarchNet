@@ -67,9 +67,24 @@ test("real browser: register, discover, plan, apply, observe drift and partial f
   const firstOperation = await firstApplyResponse.json();
   expect(typeof firstOperation.id).toBe("string");
   let operation = page.locator("#operation-list article").filter({ hasText: firstOperation.id });
+  const refreshOperationSnapshot = async (): Promise<Snapshot> => {
+    await expect(page.locator("#operations")).toBeVisible();
+    const refreshed = page.waitForResponse(
+      (r) => r.request().method() === "GET" && new URL(r.url()).pathname === "/api/v1/snapshot",
+    );
+    await page.getByRole("button", { name: "Refresh", exact: true }).click();
+    const response = await refreshed;
+    expect(response.status()).toBe(200);
+    const value = (await response.json()) as Snapshot;
+    // A click or response header does not mean the new view has been published.
+    await expect(page.locator("#notice")).toHaveText(
+      "Updated. Configuration observations are not connectivity measurements.",
+    );
+    return value;
+  };
   await expect
     .poll(async () => {
-      await page.getByRole("button", { name: "Refresh", exact: true }).click();
+      await refreshOperationSnapshot();
       return operation.textContent();
     })
     .toContain("Simulation converged");
@@ -152,11 +167,7 @@ test("real browser: register, discover, plan, apply, observe drift and partial f
   let operationSnapshot: Snapshot | undefined;
   await expect
     .poll(async () => {
-      const refreshed = page.waitForResponse(
-        (r) => r.request().method() === "GET" && new URL(r.url()).pathname === "/api/v1/snapshot",
-      );
-      await page.getByRole("button", { name: "Refresh", exact: true }).click();
-      operationSnapshot = (await (await refreshed).json()) as Snapshot;
+      operationSnapshot = await refreshOperationSnapshot();
       return operation.textContent();
     })
     .toContain("Partial completion");
