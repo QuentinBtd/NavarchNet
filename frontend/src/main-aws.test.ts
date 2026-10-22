@@ -1132,6 +1132,119 @@ it("source CIDR main integration uses only the selected SOURCE GET and fences ac
       document.body.replaceChildren();
     }
 }, 15_000);
+function consentTopology(id: string, generation: number): TopologyView {
+  const view = topology(id);
+  view.topology.id = `consent-${id}-${generation}`;
+  const row = required(view.topology.resources[0]);
+  row.kind = "vpc";
+  row.id = `vpc-${id}`;
+  row.owner_account_id = view.topology.aws_account_id;
+  return view;
+}
+it("old metadata consent completion cannot reload a newer same-account saved view", async () => {
+  // Deferred fetch only: no real SDK, credential, server or database write.
+  for (const retirement of ["reload", "ABA"]) {
+    const pending = deferred();
+    let reads = 0,
+      writes = 0;
+    await boot(
+      async (path) => {
+        if (path.endsWith("/adoptions")) {
+          writes++;
+          return pending.promise;
+        }
+        return response(consentTopology(path.includes("account-b") ? "account-b" : "account-a", ++reads));
+      },
+      { ...snapshot, role: "admin", aws_read_only_enabled: true },
+    );
+    select("account-a");
+    await vi.waitFor(() => expect(document.querySelector("#aws-topology form")).not.toBeNull());
+    const oldForm = required(document.querySelector<HTMLFormElement>("#aws-topology form"));
+    required(oldForm.querySelector("input")).value = "Original capture consent";
+    oldForm.dispatchEvent(new Event("submit", { cancelable: true }));
+    expect(writes).toBe(1);
+    if (retirement === "ABA") {
+      select("account-b");
+      await vi.waitFor(() =>
+        expect(document.querySelector("[data-topology-id]")?.getAttribute("data-topology-id")).toBe(
+          "consent-account-b-2",
+        ),
+      );
+    }
+    select("account-a");
+    const expectedReads = retirement === "ABA" ? 3 : 2;
+    await vi.waitFor(() =>
+      expect(document.querySelector("[data-topology-id]")?.getAttribute("data-topology-id")).toBe(
+        `consent-account-a-${expectedReads}`,
+      ),
+    );
+    expect(reads).toBe(expectedReads);
+    pending.resolve(response({}));
+    await new Promise((done) => setTimeout(done, 0));
+    expect(reads).toBe(expectedReads);
+    expect(writes).toBe(1);
+    expect(document.querySelector("[data-topology-id]")?.getAttribute("data-topology-id")).toBe(
+      `consent-account-a-${expectedReads}`,
+    );
+    vi.unstubAllGlobals();
+    document.body.replaceChildren();
+  }
+});
+it("current metadata consent keeps its exact payload and reloads its selected saved capture", async () => {
+  let reads = 0;
+  await boot(
+    async (path) =>
+      path.endsWith("/adoptions") ? response({}) : response(consentTopology("account-a", ++reads)),
+    { ...snapshot, role: "admin", aws_read_only_enabled: true },
+  );
+  select("account-a");
+  await vi.waitFor(() => expect(document.querySelector("#aws-topology form")).not.toBeNull());
+  const form = required(document.querySelector<HTMLFormElement>("#aws-topology form"));
+  required(form.querySelector("input")).value = "  Keep literal consent reason  ";
+  form.dispatchEvent(new Event("submit", { cancelable: true }));
+  await vi.waitFor(() =>
+    expect(document.querySelector("[data-topology-id]")?.getAttribute("data-topology-id")).toBe(
+      "consent-account-a-2",
+    ),
+  );
+  const calls = vi.mocked(fetch).mock.calls.filter(([path]) => String(path).endsWith("/adoptions"));
+  expect(calls).toHaveLength(1);
+  expect(calls[0]?.[0]).toBe("/api/v1/aws/accounts/account-a/adoptions");
+  expect(calls[0]?.[1]?.method).toBe("POST");
+  expect(JSON.parse(String(calls[0]?.[1]?.body))).toEqual({
+    topology_id: "consent-account-a-1",
+    resource_kind: "vpc",
+    resource_id: "vpc-account-a",
+    reason: "  Keep literal consent reason  ",
+  });
+  expect(reads).toBe(2);
+});
+it("current metadata consent permission getter blocks retained programmatic submits after role or SDK downgrade", async () => {
+  // GREEN qualification of the existing getter, not another claimed product defect.
+  for (const change of ["role", "SDK"]) {
+    const state: Snapshot = { ...snapshot, role: "admin", aws_read_only_enabled: true };
+    let writes = 0;
+    await boot(async (path) => {
+      if (path.endsWith("/adoptions")) writes++;
+      return response(consentTopology("account-a", 1));
+    }, state);
+    select("account-a");
+    await vi.waitFor(() => expect(document.querySelector("#aws-topology form")).not.toBeNull());
+    const form = required(document.querySelector<HTMLFormElement>("#aws-topology form")),
+      button = required(form.querySelector("button"));
+    required(form.querySelector("input")).value = "Do not dispatch after downgrade";
+    if (change === "role") state.role = "read_only";
+    else state.aws_read_only_enabled = false;
+    required(document.querySelector<HTMLButtonElement>("#refresh")).click();
+    await vi.waitFor(() => expect(button.disabled).toBe(true));
+    button.disabled = false;
+    form.dispatchEvent(new Event("submit", { cancelable: true }));
+    expect(writes).toBe(0);
+    expect(form.textContent).toContain("Metadata consent is no longer enabled");
+    vi.unstubAllGlobals();
+    document.body.replaceChildren();
+  }
+});
 it("late account topology cannot replace a newer selected account", async () => {
   const old = deferred();
   await boot(async (path) => (path.includes("account-a") ? old.promise : response(topology("account-b"))));

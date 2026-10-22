@@ -307,8 +307,9 @@ async function loadAwsTopology(id: string) {
         return isAdmin() && !!snapshot?.aws_read_only_enabled;
       },
       onConsent: async (consent) => {
+        if (version !== awsViewVersion || selectedAwsAccountId !== id) return;
         await request(`/aws/accounts/${encodeURIComponent(id)}/adoptions`, consent);
-        if (selectedAwsAccountId === id) await loadAwsTopology(id);
+        if (version === awsViewVersion && selectedAwsAccountId === id) await loadAwsTopology(id);
       },
       onLookup: async (query) => {
         if (version !== awsViewVersion || selectedAwsAccountId !== id) return;

@@ -1,4 +1,4 @@
-import { describe, expect, it, vi } from "vitest";
+import { afterEach, describe, expect, it, vi } from "vitest";
 import { renderAwsTopology } from "./aws-view";
 import type { AdoptionConsent, AwsResource, TopologyView } from "./generated";
 
@@ -47,6 +47,7 @@ function fixture(): TopologyView {
   };
 }
 describe("read-only AWS observations", () => {
+  afterEach(() => document.body.replaceChildren());
   it("keeps CIDR controls optional/lazy and retires retained actions when resource paging recreates cards", () => {
     const view = fixture(),
       first = view.topology.resources[0];
@@ -423,6 +424,7 @@ describe("read-only AWS observations", () => {
         received = consent;
       },
     });
+    document.body.append(node);
     expect(node.querySelectorAll("form")).toHaveLength(1);
     const input = node.querySelector<HTMLInputElement>("input");
     const form = node.querySelector("form");
@@ -444,6 +446,71 @@ describe("read-only AWS observations", () => {
     expect(
       renderAwsTopology(view, { canConsent: true, onConsent: async () => {} }).querySelector("form"),
     ).toBeNull();
+  });
+  it("retires metadata consent forms replaced by local resource pagination", () => {
+    const view = fixture();
+    const first = view.topology.resources[0];
+    if (!first) throw new Error("Fixture missing VPC");
+    view.topology.resources = Array.from({ length: 201 }, (_, index) => ({
+      ...first,
+      id: `vpc-consent-${index}`,
+    }));
+    const onConsent = vi.fn(async () => {});
+    const node = renderAwsTopology(view, { canConsent: true, onConsent, isCurrent: () => true });
+    document.body.append(node);
+    const oldForm = node.querySelector("form");
+    const input = oldForm?.querySelector("input");
+    const more = [...node.querySelectorAll<HTMLButtonElement>("button")].find(
+      (button) => button.textContent === "Show more observed records",
+    );
+    if (!oldForm || !input || !more) throw new Error("Consent controls missing");
+    input.value = "Consent for the original captured resource only";
+    more.click();
+    expect(node.contains(oldForm)).toBe(false);
+    oldForm.dispatchEvent(new Event("submit", { cancelable: true }));
+    expect(onConsent).not.toHaveBeenCalled();
+  });
+  it("fences pending metadata consent success error and control restoration after retirement", async () => {
+    for (const retirement of ["generation", "form removal", "role"])
+      for (const failed of [false, true]) {
+        let current = true,
+          allowed = true;
+        let resolve!: () => void, reject!: (error: Error) => void;
+        const pending = new Promise<void>((yes, no) => {
+          resolve = yes;
+          reject = no;
+        });
+        const onConsent = vi.fn(() => pending);
+        const node = renderAwsTopology(fixture(), {
+          get canConsent() {
+            return allowed;
+          },
+          isCurrent: () => current,
+          onConsent,
+        });
+        document.body.append(node);
+        const form = node.querySelector("form"),
+          input = form?.querySelector("input"),
+          button = form?.querySelector("button"),
+          status = form?.querySelector('[role="status"]');
+        if (!form || !input || !button || !status) throw new Error("Consent controls missing");
+        input.value = "Preserve retired reason";
+        form.dispatchEvent(new Event("submit", { cancelable: true }));
+        expect(button.disabled).toBe(true);
+        form.dispatchEvent(new Event("submit", { cancelable: true }));
+        expect(onConsent).toHaveBeenCalledTimes(1);
+        status.textContent = "Current UI owns this status";
+        if (retirement === "generation") current = false;
+        if (retirement === "form removal") form.remove();
+        if (retirement === "role") allowed = false;
+        if (failed) reject(new Error("Obsolete metadata consent failure"));
+        else resolve();
+        await new Promise((done) => setTimeout(done, 0));
+        expect(input.value).toBe("Preserve retired reason");
+        expect(status.textContent).toBe("Current UI owns this status");
+        expect(button.disabled).toBe(true);
+        node.remove();
+      }
   });
   it("pages observed records without presenting a bounded subset as the full inventory", () => {
     const view = fixture();

@@ -306,8 +306,11 @@ export function renderAwsTopology(
           const status = text("p", "");
           status.setAttribute("role", "status");
           form.append(label, reason, submit, status);
+          const current = () =>
+            root.isConnected && root.contains(form) && (!options.isCurrent || options.isCurrent());
           form.onsubmit = (event) => {
             event.preventDefault();
+            if (!current()) return;
             if (!options.canConsent) {
               status.textContent = "Metadata consent is no longer enabled for this session.";
               return;
@@ -325,11 +328,12 @@ export function renderAwsTopology(
                   resource_id: resource.id,
                   reason: reason.value,
                 });
-                reason.value = "";
+                if (current() && options.canConsent) reason.value = "";
               } catch (error) {
-                status.textContent = error instanceof Error ? error.message : "Metadata consent failed";
+                if (current() && options.canConsent)
+                  status.textContent = error instanceof Error ? error.message : "Metadata consent failed";
               } finally {
-                submit.disabled = !options.canConsent;
+                if (current()) submit.disabled = !options.canConsent;
               }
             })();
           };
