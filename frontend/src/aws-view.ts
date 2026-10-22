@@ -1,6 +1,7 @@
 import type { AdoptionConsent, TopologyView, VerifiedAccount } from "./generated";
 import { renderNatMetadata } from "./nat-metadata-view";
 import type { SavedNatReferenceLookup } from "./nat-reference-view";
+import { renderSavedAwsWorkspace } from "./saved-aws-workspace";
 import { captureSourceCidrContext, type SavedSourceCidr } from "./source-cidr-view";
 import {
   renderSourceHandoff,
@@ -31,6 +32,11 @@ export function renderAwsTopology(
 ): HTMLElement {
   const root = document.createElement("section");
   const topology = view.topology;
+  const workspace: HTMLElement = renderSavedAwsWorkspace(
+    topology,
+    () => (!options.isCurrent || options.isCurrent()) && root.isConnected && root.contains(workspace),
+  );
+  root.append(workspace);
   const sourceCidr = options.onSourceCidrCoverage ? captureSourceCidrContext(topology) : undefined;
   const networkAccounts = options.networkAccounts?.map((account) => ({ ...account }));
   const tableSelections = new Map(

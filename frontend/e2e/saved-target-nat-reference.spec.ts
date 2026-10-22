@@ -123,7 +123,12 @@ test("real browser: source A explicitly inspects every target subnet NAT referen
       ["subnet_id", subnet],
       ["destination", "203.0.113.1"],
     ]);
-    await expect(page.locator("#aws-topology h3")).toContainText(source.aws_account_id);
+    await expect(
+      page.getByRole("heading", {
+        name: `AWS observation · ${source.aws_account_id} · ${source.region}`,
+        exact: true,
+      }),
+    ).toBeVisible();
   }
   await expect(target.locator("img, a, form, input, [data-aws-write]")).toHaveCount(0);
   expect(await form.evaluate((node: HTMLFormElement) => node.checkValidity())).toBe(true);

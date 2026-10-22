@@ -456,7 +456,11 @@ describe("read-only AWS observations", () => {
     const node = renderAwsTopology(view, { canConsent: false, onConsent: async () => {} });
     expect(node.querySelectorAll("article")).toHaveLength(200);
     expect(node.textContent).toContain("Showing 200 of 201");
-    node.querySelector<HTMLButtonElement>("button")?.click();
+    const more = [...node.querySelectorAll<HTMLButtonElement>("button")].find(
+      (button) => button.textContent === "Show more observed records",
+    );
+    if (!more) throw new Error("Observed-record continuation missing");
+    more.click();
     expect(node.querySelectorAll("article")).toHaveLength(201);
     expect(node.textContent).toContain("Showing 201 of 201");
   });
