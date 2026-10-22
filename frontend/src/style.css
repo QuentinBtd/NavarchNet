@@ -277,7 +277,166 @@ summary {
 .step-label {
   color: #8ef1df;
 }
+.plan-impact {
+  display: grid;
+  grid-template-columns: minmax(0, 0.8fr) minmax(0, 1.2fr);
+  gap: 1rem;
+  margin: 1rem 0;
+}
+.plan-impact-before,
+.plan-impact-proposed {
+  padding: 1rem;
+  border: 1px solid #4e6278;
+  border-radius: 6px;
+  min-width: 0;
+  overflow-wrap: anywhere;
+}
+.plan-impact h4 {
+  margin: 0 0 0.8rem;
+}
+.plan-impact-proposed {
+  border-style: dashed;
+  border-color: #a48955;
+}
+.plan-impact p,
+.plan-impact dd {
+  font-size: 0.85rem;
+}
+.plan-impact-intent {
+  display: grid;
+  gap: 0.6rem;
+}
+.plan-impact-intent > div {
+  padding: 0.7rem;
+  border: 1px dashed #a48955;
+  background: #23251f;
+}
+.plan-impact-intent code {
+  display: block;
+  margin-top: 0.3rem;
+}
+.plan-impact dt {
+  font-size: 0.85rem;
+  margin-top: 0.7rem;
+}
+.plan-impact dd {
+  margin: 0.2rem 0 0;
+  color: #b7c8d9;
+}
+.network-workspace {
+  margin: 1rem 0;
+}
+.network-map-controls {
+  display: grid;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  gap: 1rem;
+  margin-bottom: 1rem;
+}
+.network-map-layout {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) 270px;
+  gap: 1rem;
+  align-items: start;
+}
+.network-map {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) 110px minmax(0, 1fr);
+  gap: 0.7rem;
+  padding: 1rem;
+  border: 1px solid #344359;
+  border-radius: 7px;
+  background: #101925;
+}
+.network-map-scope {
+  border: 1px solid #40566b;
+  border-radius: 6px;
+  padding: 0.8rem;
+  min-width: 0;
+  overflow-wrap: anywhere;
+}
+.network-map-scope h3 {
+  font-size: 0.85rem;
+  color: #b7c8d9;
+  margin: 0 0 1rem;
+}
+.network-map-node {
+  display: flex;
+  flex-direction: column;
+  align-items: start;
+  gap: 0.5rem;
+  width: 100%;
+  margin: 0;
+  padding: 1rem;
+  min-height: 105px;
+  color: #dce7ef;
+  background: #1b2a3d;
+  border: 1px solid #5e748b;
+  text-align: left;
+  overflow-wrap: anywhere;
+}
+.network-map-node[aria-pressed="true"] {
+  border: 2px solid #7ddfcf;
+  background: #193a3b;
+}
+.network-map-node span {
+  font-size: 0.85rem;
+  color: #b7c8d9;
+}
+.network-map-subnets {
+  display: grid;
+  gap: 0.6rem;
+}
+.network-map-subnets .network-map-node {
+  min-height: 70px;
+  padding: 0.65rem;
+}
+.network-map-gap {
+  align-self: center;
+  font-size: 0.8rem;
+  text-align: center;
+  color: #dfc58e;
+}
+.network-resource-inspector {
+  padding: 1rem;
+  border: 1px solid #40566b;
+  border-radius: 6px;
+  min-width: 0;
+  overflow-wrap: anywhere;
+  background: #172332;
+}
+.network-resource-inspector h3 {
+  margin: 0;
+}
+.network-resource-inspector dt {
+  margin-top: 0.8rem;
+  font-size: 0.8rem;
+  color: #a5b8cc;
+}
+.network-resource-inspector dd {
+  margin: 0.15rem 0 0;
+}
+.network-resource-inspector p,
+.network-map-legend,
+.network-map-explanation {
+  font-size: 0.85rem;
+}
+.network-map-actions {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 1rem;
+  margin-top: 1rem;
+}
+@media (max-width: 1150px) {
+  .network-map-layout {
+    grid-template-columns: minmax(0, 1fr);
+  }
+}
 @media (max-width: 700px) {
+  .network-map,
+  .network-map-controls,
+  .plan-impact {
+    grid-template-columns: minmax(0, 1fr);
+  }
   #workspace:not([hidden]) {
     grid-template-columns: 1fr;
     gap: 0.5rem;

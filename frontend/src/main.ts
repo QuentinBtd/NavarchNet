@@ -23,6 +23,7 @@ import type {
   VpcLookupResponse,
 } from "./generated";
 import { createNavigation } from "./navigation";
+import { renderNetworkWorkspace } from "./network-workspace";
 import { renderOperationReview } from "./operation-review-view";
 import { renderPlanReview } from "./plan-review-view";
 import { Session } from "./session";
@@ -46,10 +47,15 @@ let selectedPlanId: string | undefined;
 let planViewVersion = 0;
 let selectedOperationId: string | undefined;
 let operationViewVersion = 0;
+let networkWorkspaceVersion = 0;
+let workspaceSelection: { networkId?: string; inventoryKey?: string } = {};
 const navigation = createNavigation(app, () => {
   session.retireRequests();
   ++awsViewVersion;
   selectedAwsAccountId = undefined;
+  ++networkWorkspaceVersion;
+  if (snapshot && window.location.hash === "#/networks") renderNetworkContext();
+  else element("network-list").replaceChildren();
   for (const node of document.querySelectorAll<HTMLButtonElement>("[data-pending]")) {
     node.disabled =
       (node.hasAttribute("data-write") && !isAdmin()) ||
@@ -133,6 +139,21 @@ function renderSubnets() {
         ),
       );
       return label;
+    }),
+  );
+}
+function renderNetworkContext() {
+  const source = snapshot;
+  const version = ++networkWorkspaceVersion;
+  if (!source) return;
+  element("network-list").replaceChildren(
+    renderNetworkWorkspace(source, {
+      selection: workspaceSelection,
+      isCurrent: () =>
+        version === networkWorkspaceVersion && snapshot === source && !element("networks").hidden,
+      onSelection: (selection) => {
+        workspaceSelection = selection;
+      },
     }),
   );
 }
@@ -453,14 +474,7 @@ async function refresh() {
       return item;
     }),
   );
-  element("network-list").replaceChildren(
-    ...snapshot.networks.map((network) =>
-      text(
-        "li",
-        `${network.name} · ${network.region} · AZ IDs ${network.az_ids.join(", ")} · simulated public IPs ${network.public_ips.join(", ")}`,
-      ),
-    ),
-  );
+  renderNetworkContext();
   options(
     "vpc",
     snapshot.inventory.map((i) => ({
@@ -488,6 +502,8 @@ element<HTMLFormElement>("login").onsubmit = (event) => {
   void run(refresh);
 };
 function clearSession() {
+  ++networkWorkspaceVersion;
+  workspaceSelection = {};
   selectedOperationId = undefined;
   ++operationViewVersion;
   clearOperationEvidence();

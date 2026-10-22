@@ -68,6 +68,43 @@ it("defaults to the first returned plan without sorting or mutating the response
   const { node } = mount([plan("new"), plan("old")]);
   expect(node.querySelector("article")?.dataset.planId).toBe("new");
 });
+it("compares unavailable before evidence with the exact selected plan's proposed targets", () => {
+  const plans = [plan("new"), plan("old")];
+  const before = structuredClone(plans);
+  const { node, makeApply } = mount(plans, "old");
+  const comparison = node.querySelector('[aria-label="Plan impact comparison"]');
+  expect(comparison).not.toBeNull();
+  expect(comparison?.getAttribute("data-plan-id")).toBe("old");
+  expect(comparison?.getAttribute("data-plan-digest")).toBe(plans[1].digest);
+  expect(comparison?.textContent).toContain("Original route targets are not stored in this plan");
+  expect(comparison?.textContent).toContain("Proposed simulation");
+  expect(comparison?.textContent).toContain("target-old");
+  expect(comparison?.textContent).not.toContain("target-new");
+  expect(makeApply).toHaveBeenCalledWith(plans[1]);
+  expect(plans).toEqual(before);
+});
+it("retains every grouped target and literal repeated entries without changing ordered evidence", () => {
+  const value = plan("grouped");
+  value.actions = [
+    { kind: "nat_route", target: "az-one", requires: [], postcondition: "required one" },
+    { kind: "nat_route", target: "az-two", requires: [0], postcondition: "required two" },
+    { kind: "nat_route", target: "az-two", requires: [0], postcondition: "literal duplicate" },
+  ];
+  const { node } = mount([value]);
+  const group = node.querySelector('[data-action-kind="nat_route"]');
+  expect(group?.querySelector("dt")?.textContent).toContain("3");
+  expect(group?.querySelector("dd")?.textContent).toBe("az-one, az-two, az-two");
+  expect(node.querySelectorAll("ol > li")).toHaveLength(3);
+  expect(JSON.parse(node.querySelector("details pre")?.textContent ?? "null")).toEqual(value);
+});
+it("does not turn unavailable policy metadata into a no-application-access assertion", () => {
+  const value = plan("unknown");
+  value.request.allow_application_traffic = undefined as unknown as boolean;
+  const { node } = mount([value]);
+  const comparison = node.querySelector('[aria-label="Plan impact comparison"]');
+  expect(comparison?.textContent).toContain("Application-traffic policy unavailable");
+  expect(comparison?.textContent).not.toContain("No application-to-application access requested");
+});
 it("does not silently replace a selected plan missing from the bounded returned history", () => {
   const { node, makeApply } = mount([plan("other")], "missing");
   expect(node.querySelector("article")).toBeNull();

@@ -15,6 +15,74 @@ type ReviewOptions = {
   makeApply: (plan: Plan) => HTMLButtonElement;
 };
 
+function renderImpact(plan: Plan): HTMLElement {
+  const root = document.createElement("div");
+  root.className = "plan-impact";
+  root.setAttribute("role", "region");
+  root.setAttribute("aria-label", "Plan impact comparison");
+  root.dataset.planId = plan.id;
+  root.dataset.planDigest = plan.digest;
+  const before = document.createElement("div");
+  before.className = "plan-impact-before";
+  before.append(
+    text("h4", "Before · evidence unavailable"),
+    text(
+      "p",
+      "Original route targets are not stored in this plan. Existing routes, prior connectivity and changes already applied cannot be reconstructed from its revisions.",
+    ),
+    text(
+      "p",
+      `Plan references inventory revision ${plan.inventory_revision} and network revision ${plan.network_revision}; these are not captured route tables.`,
+    ),
+  );
+  const proposed = document.createElement("div");
+  proposed.className = "plan-impact-proposed";
+  proposed.append(text("h4", "Proposed simulation · not an operation result"));
+  const intent = document.createElement("div");
+  intent.className = "plan-impact-intent";
+  for (const [label, id] of [
+    ["Selected VPC", plan.request.vpc_id],
+    ["Requested regional network", plan.request.network_id],
+  ]) {
+    const scope = document.createElement("div");
+    scope.append(text("strong", label), text("code", id));
+    intent.append(scope);
+  }
+  proposed.append(
+    intent,
+    text(
+      "p",
+      `${plan.request.subnet_ids.length} selected attachment subnets · ${plan.actions.length} planned actions.`,
+    ),
+  );
+  proposed.append(
+    text(
+      "p",
+      plan.request.allow_application_traffic === true
+        ? "Application traffic requested — review its policy and prerequisites."
+        : plan.request.allow_application_traffic === false
+          ? "No application-to-application access requested."
+          : "Application-traffic policy unavailable.",
+    ),
+  );
+  const groups = new Map<ActionKind, string[]>();
+  for (const action of plan.actions) {
+    const targets = groups.get(action.kind) ?? [];
+    targets.push(action.target);
+    groups.set(action.kind, targets);
+  }
+  const targets = document.createElement("dl");
+  for (const [kind, values] of groups) {
+    const group = document.createElement("div");
+    group.dataset.actionKind = kind;
+    group.append(text("dt", `${labels[kind] ?? kind} · ${values.length}`), text("dd", values.join(", ")));
+    targets.append(group);
+  }
+  proposed.append(text("p", "Affected targets, grouped by action — not step order:"), targets);
+  root.append(before, proposed);
+  return root;
+}
+
 // Local presentation only: no request, plan recomputation, new permissions or identifier repair.
 export function renderPlanReview(plans: Plan[], options: ReviewOptions): HTMLElement {
   const root = document.createElement("div");
@@ -79,7 +147,8 @@ export function renderPlanReview(plans: Plan[], options: ReviewOptions): HTMLEle
     text("summary", "Technical plan identifiers & original evidence"),
     text("pre", JSON.stringify(plan, null, 2)),
   );
-  card.append(actions, technical, options.makeApply(plan));
+  technical.append(text("h4", "Ordered prerequisites & required postconditions"), actions);
+  card.append(renderImpact(plan), technical, options.makeApply(plan));
   root.append(card);
   return root;
 }

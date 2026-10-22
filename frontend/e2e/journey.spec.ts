@@ -54,6 +54,14 @@ test("real browser: register, discover, plan, apply, observe drift and partial f
   await expect(plan).toContainText("return_route");
   await expect(page).toHaveURL(/#\/plans$/);
   await expect(page.locator("[data-workspace]:visible")).toHaveCount(1);
+  await expect(plan).toHaveAttribute("data-plan-id", firstSaved.id);
+  const impact = plan.getByRole("region", { name: "Plan impact comparison", exact: true });
+  await expect(impact).toBeVisible();
+  await expect(impact).toHaveAttribute("data-plan-id", firstSaved.id);
+  await expect(impact).toHaveAttribute("data-plan-digest", firstSaved.digest);
+  await expect(impact).toContainText("Original route targets are not stored in this plan");
+  for (const action of firstSaved.actions)
+    await expect(impact.locator(`[data-action-kind="${action.kind}"]`)).toContainText(action.target);
   await page.setViewportSize({ width: 1440, height: 900 });
   await page.screenshot({ path: testInfo.outputPath("compact-plan-review.png"), fullPage: true });
   await page.getByLabel("Demo execution scenario").selectOption("throttle");
