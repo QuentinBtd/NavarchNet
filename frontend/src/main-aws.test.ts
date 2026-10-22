@@ -1296,3 +1296,100 @@ function required<T>(value: T | null | undefined): T {
   if (value === null || value === undefined) throw new Error("Missing test fixture/control");
   return value;
 }
+
+function handoffState(): Snapshot {
+  const data = structuredClone(snapshot);
+  data.role = "admin";
+  data.accounts = ["a", "b"].map((id) => ({
+    id,
+    name: id,
+    provider: "fake",
+    role_arn: "fake:fixture",
+    revision: 1,
+  }));
+  data.inventory = ["a", "b"].map((id) => ({
+    account_id: id,
+    vpc_id: `vpc-${id}`,
+    region: "eu-west-1",
+    cidr: "10.10.0.0/16",
+    revision: 1,
+    subnets: [{ id: `subnet-${id}`, az_id: "az-1", route_table: `rtb-${id}`, default_route_managed: true }],
+  }));
+  data.networks = ["a", "b"].map((id) => ({
+    id: `net-${id}`,
+    name: id,
+    region: "eu-west-1",
+    revision: 1,
+    egress_cidr: "10.250.0.0/16",
+    az_ids: ["az-1"],
+    public_ips: [],
+    application_cidrs: [],
+    managed_nat: true,
+  }));
+  return data;
+}
+function handoffChoice(id: string, value: string) {
+  const control = required(document.querySelector<HTMLSelectElement>(`#${id}`));
+  control.value = value;
+  control.dispatchEvent(new Event("change"));
+}
+function handoffButton() {
+  return required(
+    [...document.querySelectorAll<HTMLButtonElement>("#network-list button")].find(
+      (b) => b.textContent === "Configure selected VPC",
+    ),
+  );
+}
+it("main hands the current selected map VPC and network into existing configuration without a request", async () => {
+  window.history.replaceState(null, "", "/#/networks");
+  await boot(async () => {
+    throw new Error("Unexpected handoff request");
+  }, handoffState());
+  handoffChoice("workspace-vpc", JSON.stringify(["b", "vpc-b"]));
+  handoffChoice("workspace-network", "net-b");
+  handoffChoice("workspace-vpc", JSON.stringify(["b", "vpc-b"]));
+  handoffChoice("vpc", "vpc-a");
+  handoffChoice("network", "net-a");
+  const old = handoffButton(),
+    calls = vi.mocked(fetch).mock.calls.length;
+  old.click();
+  expect(window.location.hash).toBe("#/connections");
+  expect(required(document.querySelector<HTMLElement>("#connection-configure")).hidden).toBe(false);
+  expect(required(document.querySelector<HTMLSelectElement>("#vpc")).value).toBe("vpc-b");
+  expect(required(document.querySelector<HTMLSelectElement>("#network")).value).toBe("net-b");
+  expect(
+    [...document.querySelectorAll<HTMLInputElement>("#subnets input:checked")].map((n) => n.value),
+  ).toEqual(["subnet-b"]);
+  expect(document.querySelector("#connection-step")?.textContent).toContain("vpc-b");
+  window.location.hash = "#/networks";
+  window.dispatchEvent(new HashChangeEvent("hashchange"));
+  handoffChoice("workspace-vpc", JSON.stringify(["a", "vpc-a"]));
+  old.click();
+  expect(window.location.hash).toBe("#/networks");
+  expect(required(document.querySelector<HTMLSelectElement>("#vpc")).value).toBe("vpc-b");
+  expect(vi.mocked(fetch).mock.calls.length).toBe(calls);
+});
+it("main refuses ambiguous or missing form identities and read-only map handoff before changing the form", async () => {
+  for (const variant of ["duplicate-vpc", "missing-option", "read-only"]) {
+    const data = handoffState();
+    if (variant === "duplicate-vpc") data.inventory[1].vpc_id = data.inventory[0].vpc_id;
+    if (variant === "read-only") data.role = "read_only";
+    window.history.replaceState(null, "", "/#/networks");
+    await boot(async () => {
+      throw new Error("Unexpected handoff request");
+    }, data);
+    if (variant === "missing-option") required(document.querySelector("#vpc option")).remove();
+    const form = required(document.querySelector("#plan-form")),
+      before = form.innerHTML,
+      calls = vi.mocked(fetch).mock.calls.length;
+    const action = handoffButton();
+    if (variant === "read-only") expect(action.disabled).toBe(true);
+    action.disabled = false;
+    action.click();
+    expect(window.location.hash).toBe("#/networks");
+    expect(form.innerHTML).toBe(before);
+    expect(vi.mocked(fetch).mock.calls.length).toBe(calls);
+    if (variant !== "read-only")
+      expect(document.querySelector("#notice")?.textContent).toContain("cannot be represented uniquely");
+  }
+});

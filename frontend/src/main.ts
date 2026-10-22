@@ -146,13 +146,43 @@ function renderNetworkContext() {
   const source = snapshot;
   const version = ++networkWorkspaceVersion;
   if (!source) return;
+  const isCurrent = () =>
+    version === networkWorkspaceVersion && snapshot === source && !element("networks").hidden;
   element("network-list").replaceChildren(
     renderNetworkWorkspace(source, {
       selection: workspaceSelection,
-      isCurrent: () =>
-        version === networkWorkspaceVersion && snapshot === source && !element("networks").hidden,
+      isCurrent,
       onSelection: (selection) => {
         workspaceSelection = selection;
+      },
+      get canConfigure() {
+        return isAdmin();
+      },
+      onConfigure: (inventory, network) => {
+        if (!isCurrent() || !isAdmin()) return;
+        const inventories = source.inventory.filter((i) => i.vpc_id === inventory.vpc_id);
+        const networks = source.networks.filter((n) => n.id === network.id);
+        const vpc = element<HTMLSelectElement>("vpc");
+        const egress = element<HTMLSelectElement>("network");
+        const uniqueOption = (select: HTMLSelectElement, value: string) =>
+          [...select.options].filter((option) => option.value === value).length === 1;
+        if (
+          inventories.length !== 1 ||
+          inventories[0] !== inventory ||
+          networks.length !== 1 ||
+          networks[0] !== network ||
+          !uniqueOption(vpc, inventory.vpc_id) ||
+          !uniqueOption(egress, network.id)
+        ) {
+          element("notice").textContent =
+            "Selected scope cannot be represented uniquely in the connection form. Refresh or select a different scope.";
+          return;
+        }
+        vpc.value = inventory.vpc_id;
+        egress.value = network.id;
+        renderSubnets();
+        connectionStep(true);
+        navigation.navigate("connections");
       },
     }),
   );
@@ -560,7 +590,8 @@ element<HTMLFormElement>("aws-register").onsubmit = (event) => {
 element<HTMLSelectElement>("vpc").onchange = renderSubnets;
 let configuringConnection = false;
 function connectionStep(configure: boolean) {
-  if (configure && !selectedInventory()) throw new Error("Register and discover an account first");
+  const inventory = configure ? selectedInventory() : undefined;
+  if (configure && !inventory) throw new Error("Register and discover an account first");
   configuringConnection = configure;
   element("connection-select").hidden = configure;
   element("connection-configure").hidden = !configure;
@@ -568,7 +599,7 @@ function connectionStep(configure: boolean) {
   element("connection-configure").inert = !configure;
   element<HTMLSelectElement>("network").disabled = !configure;
   element("connection-step").textContent = configure
-    ? "2. Configure subnets & egress → 3. Review plan"
+    ? `2. Configure ${inventory?.vpc_id} subnets & egress → 3. Review plan`
     : "1. Select VPC → 2. Configure → 3. Review plan";
 }
 element("configure-connection").onclick = () => void run(async () => connectionStep(true));

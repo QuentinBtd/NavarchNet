@@ -7,6 +7,8 @@ type Options = {
   selection: Selection;
   isCurrent: () => boolean;
   onSelection: (selection: Selection) => void;
+  canConfigure?: boolean;
+  onConfigure?: (inventory: Inventory, network: RegionalNetwork) => void;
 };
 type Resource = { kind: "network" } | { kind: "vpc" } | { kind: "subnet"; index: number };
 const inventoryKey = (i: Inventory) => JSON.stringify([i.account_id, i.vpc_id]);
@@ -288,6 +290,16 @@ export function renderNetworkWorkspace(data: Context, options: Options): HTMLEle
     provenance.className = "network-map-legend";
     const actions = document.createElement("div");
     actions.className = "network-map-actions";
+    if (inventory && options.onConfigure) {
+      const configure = text("button", "Configure selected VPC");
+      configure.type = "button";
+      configure.disabled = options.canConfigure !== true;
+      configure.onclick = () => {
+        if (!configure.disabled && active(configure) && options.canConfigure === true)
+          options.onConfigure?.(inventory, network);
+      };
+      actions.append(configure);
+    }
     for (const [label, href] of [
       ["Select VPCs & plan a connection", "#/connections"],
       ["Review returned plans", "#/plans"],

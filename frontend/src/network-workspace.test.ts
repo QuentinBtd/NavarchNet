@@ -174,3 +174,51 @@ it("empty or unpaired scope remains explicit instead of fabricating resources or
   expect(root.querySelector("aside")?.textContent).toContain("Not reported by this model");
   expect(root.querySelectorAll(".network-map-node")).toHaveLength(1);
 });
+
+it("hands off only the current exact map scope and rejects retired or downgraded configure controls", () => {
+  const data = state();
+  data.accounts.push({ ...data.accounts[0], id: "other" });
+  data.inventory.push({ ...data.inventory[0], account_id: "other" });
+  let current = true,
+    allowed = true;
+  const onConfigure = vi.fn();
+  const root = renderNetworkWorkspace(data, {
+    selection: {},
+    isCurrent: () => current,
+    onSelection: () => {},
+    get canConfigure() {
+      return allowed;
+    },
+    onConfigure,
+  });
+  document.body.append(root);
+  const old = button(root, "Configure selected VPC");
+  choose(root, "workspace-vpc", JSON.stringify(["other", "vpc-actual"]));
+  old.click();
+  expect(onConfigure).not.toHaveBeenCalled();
+  const live = button(root, "Configure selected VPC");
+  live.click();
+  expect(onConfigure).toHaveBeenCalledExactlyOnceWith(data.inventory[1], data.networks[0]);
+  allowed = false;
+  live.click();
+  allowed = true;
+  current = false;
+  live.click();
+  root.remove();
+  current = true;
+  live.click();
+  expect(onConfigure).toHaveBeenCalledTimes(1);
+  const reader = renderNetworkWorkspace(data, {
+    selection: {},
+    isCurrent: () => true,
+    onSelection: () => {},
+    canConfigure: false,
+    onConfigure,
+  });
+  document.body.append(reader);
+  const disabled = button(reader, "Configure selected VPC");
+  expect(disabled.disabled).toBe(true);
+  disabled.disabled = false;
+  disabled.click();
+  expect(onConfigure).toHaveBeenCalledTimes(1);
+});
