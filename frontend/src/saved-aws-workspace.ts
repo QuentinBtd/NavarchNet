@@ -1,3 +1,4 @@
+import { renderCapturedRouteRecords } from "./captured-route-records";
 import type { AwsTopology, ResourceKind } from "./generated";
 import { text } from "./view";
 
@@ -204,6 +205,12 @@ export function renderSavedAwsWorkspace(topology: AwsTopology, isCurrent: () => 
           "Reported metadata is not health or a usable path. Unknown used egress and return routing remain unknown.",
         ),
       );
+      const routes = renderCapturedRouteRecords(
+        record,
+        { id: topology.id, completed_at: topology.completed_at, resource_index: selected },
+        () => active(inspector),
+      );
+      if (routes) inspector.append(routes);
       const original = document.createElement("details");
       original.append(text("summary", "Original captured record"));
       original.ontoggle = () => {

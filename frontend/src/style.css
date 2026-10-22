@@ -344,6 +344,9 @@ summary {
   grid-template-columns: repeat(2, minmax(0, 1fr));
   gap: 0.8rem;
 }
+.saved-map-layout:has([data-captured-route-entries][open]) {
+  grid-template-columns: minmax(0, 1fr) minmax(0, 42%);
+}
 .saved-map-lane {
   padding: 0.8rem;
   border: 1px solid #40566b;
@@ -491,7 +494,8 @@ summary {
 }
 @media (max-width: 1150px) {
   .network-map-layout,
-  .saved-map-layout {
+  .saved-map-layout,
+  .saved-map-layout:has([data-captured-route-entries][open]) {
     grid-template-columns: minmax(0, 1fr);
   }
 }
