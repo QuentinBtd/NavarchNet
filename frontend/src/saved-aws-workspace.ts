@@ -97,14 +97,20 @@ export function renderSavedAwsWorkspace(topology: AwsTopology, isCurrent: () => 
   const counts = new Map<string, number>();
   for (const record of topology.resources) counts.set(record.id, (counts.get(record.id) ?? 0) + 1);
   let filter = "all",
+    query = "",
     selected = 0,
     limit = 24,
     version = 0;
-  function draw(focusFilter = false) {
+  function draw(focus?: "kind" | "search", cursor?: [number, number]) {
     const epoch = ++version;
     const active = (node: HTMLElement) =>
       root.isConnected && isCurrent() && version === epoch && root.contains(node);
-    const indexes = topology.resources.flatMap((r, i) => (filter === "all" || r.kind === filter ? [i] : []));
+    const indexes = topology.resources.flatMap((r, i) =>
+      (filter === "all" || r.kind === filter) &&
+      (r.id.includes(query) || (Object.hasOwn(r.tags, "Name") && r.tags.Name.includes(query)))
+        ? [i]
+        : [],
+    );
     if (!indexes.includes(selected)) selected = indexes[0] ?? -1;
     const heading = text("h3", `Saved resources · ${topology.aws_account_id} · ${topology.region}`);
     const scope = text(
@@ -131,9 +137,28 @@ export function renderSavedAwsWorkspace(topology: AwsTopology, isCurrent: () => 
       filter = select.value;
       selected = -1;
       limit = 24;
-      draw(true);
+      draw("kind");
     };
-    controls.append(label, select);
+    const kindControl = document.createElement("div");
+    kindControl.append(label, select);
+    const searchControl = document.createElement("div");
+    const searchLabel = text("label", "Filter saved ID or Name (case-sensitive)");
+    searchLabel.htmlFor = "saved-map-search";
+    const search = document.createElement("input");
+    search.id = searchLabel.htmlFor;
+    search.type = "search";
+    search.autocomplete = "off";
+    search.spellcheck = false;
+    search.value = query;
+    search.oninput = () => {
+      if (!active(search)) return;
+      query = search.value;
+      selected = -1;
+      limit = 24;
+      draw("search", [search.selectionStart ?? query.length, search.selectionEnd ?? query.length]);
+    };
+    searchControl.append(searchLabel, search);
+    controls.append(kindControl, searchControl);
     const count = text(
       "p",
       `Showing ${Math.min(limit, indexes.length)} of ${indexes.length} filtered records · ${topology.resources.length} records in this capture, not a cloud total.`,
@@ -254,7 +279,11 @@ export function renderSavedAwsWorkspace(topology: AwsTopology, isCurrent: () => 
       text("p", "Saved observation · kind grouping only · no inferred network links"),
       explanation,
     );
-    if (focusFilter) select.focus();
+    if (focus === "kind") select.focus();
+    if (focus === "search") {
+      search.focus();
+      if (cursor) search.setSelectionRange(...cursor);
+    }
   }
   draw();
   return root;

@@ -426,7 +426,7 @@ describe("read-only AWS observations", () => {
     });
     document.body.append(node);
     expect(node.querySelectorAll("form")).toHaveLength(1);
-    const input = node.querySelector<HTMLInputElement>("input");
+    const input = node.querySelector<HTMLInputElement>('input[id^="aws-adoption-reason-"]');
     const form = node.querySelector("form");
     if (!input || !form) throw new Error("Adoption form missing");
     form.dispatchEvent(new Event("submit", { bubbles: true, cancelable: true }));

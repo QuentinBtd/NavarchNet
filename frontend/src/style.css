@@ -331,7 +331,14 @@ summary {
   background: #101925;
 }
 .saved-map-controls {
-  max-width: 360px;
+  max-width: 720px;
+  display: flex;
+  flex-wrap: wrap;
+  gap: 0 1rem;
+}
+.saved-map-controls > div {
+  flex: 1 1 240px;
+  min-width: 0;
 }
 .saved-map-layout {
   display: grid;

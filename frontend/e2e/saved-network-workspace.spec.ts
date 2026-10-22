@@ -171,3 +171,75 @@ test("real browser: map inspector retains original saved VPC and TGW route entri
   await page.getByRole("button", { name: "Sign out", exact: true }).click();
   await expect(page.locator("#aws-topology")).toBeEmpty();
 });
+
+test("real browser: saved map filters loaded records by literal ID without new reads", async ({
+  page,
+  request,
+}, testInfo) => {
+  const headers = { Authorization: "Bearer browser-test-reader-credential-free-local-only" };
+  const snapshotResponse = await request.get("/api/v1/snapshot", { headers });
+  expect(snapshotResponse.status()).toBe(200);
+  const before = (await snapshotResponse.json()) as Snapshot;
+  const account = before.aws_accounts.find((a) => a.name === "Browser saved TGW B");
+  if (!account) throw new Error("Saved registration missing");
+  const url = `/api/v1/aws/accounts/${account.id}/topology`;
+  const response = await request.get(url, { headers });
+  expect(response.status()).toBe(200);
+  const view = (await response.json()) as TopologyView;
+  expect(view.topology.account_id).toBe(account.id);
+  expect(view.topology.execution_enabled).toBe(false);
+  expect(view.topology.connectivity_tested).toBe(false);
+  const index = view.topology.resources.findIndex((r) => r.id === "nat-browser-regional");
+  expect(index).toBeGreaterThanOrEqual(0);
+  const record = view.topology.resources[index];
+  await page.goto("/#/aws");
+  await page
+    .getByLabel("Demo token or OIDC access token")
+    .fill("browser-test-reader-credential-free-local-only");
+  await page.getByRole("button", { name: "Connect", exact: true }).click();
+  await page
+    .locator("#aws-account-list li")
+    .filter({ hasText: account.name })
+    .getByRole("button", { name: "View saved AWS observation", exact: true })
+    .click();
+  const map = page.getByRole("region", { name: "Saved AWS resource map", exact: true });
+  await expect(map).toHaveAttribute("data-topology-id", view.topology.id);
+  const calls: string[] = [];
+  page.on("request", (r) => {
+    if (r.url().includes("/api/v1/")) calls.push(r.url());
+  });
+  // Real original capture and false markers established before missing-UI RED.
+  const filter = map.getByLabel("Filter saved ID or Name (case-sensitive)", { exact: true });
+  await expect(filter).toBeVisible();
+  await filter.fill(record.id.slice(0, 3));
+  await filter.press("End");
+  await filter.pressSequentially(record.id.slice(3));
+  await expect(filter).toHaveValue(record.id);
+  const matches = view.topology.resources.flatMap((r, i) =>
+    r.id.includes(record.id) || (r.tags.Name ?? "").includes(record.id) ? [i] : [],
+  );
+  await expect(map.locator("button[data-record-index]")).toHaveCount(Math.min(24, matches.length));
+  await map.locator(`button[data-record-index="${index}"]`).click();
+  const inspector = map.getByRole("complementary", { name: "Saved AWS record inspector" });
+  await inspector.getByText("Original captured record", { exact: true }).click();
+  expect(JSON.parse(await inspector.locator("pre").innerText())).toEqual(record);
+  await filter.fill("no-record-with-this-literal-<img src=x>");
+  await expect(map.locator("button[data-record-index]")).toHaveCount(0);
+  await expect(map).toContainText("No resource absence is inferred");
+  await expect(inspector.locator("pre")).toHaveCount(0);
+  await filter.fill(record.id);
+  await page.setViewportSize({ width: 1440, height: 1080 });
+  await map.screenshot({ path: testInfo.outputPath("saved-map-filter-desktop.png") });
+  await page.setViewportSize({ width: 390, height: 844 });
+  expect(await page.evaluate(() => document.documentElement.scrollWidth <= innerWidth)).toBe(true);
+  await map.screenshot({ path: testInfo.outputPath("saved-map-filter-mobile.png") });
+  await filter.fill("");
+  await expect(map.locator("button[data-record-index]")).toHaveCount(
+    Math.min(24, view.topology.resources.length),
+  );
+  expect(calls).toEqual([]);
+  const after = await request.get(url, { headers });
+  expect(await after.json()).toEqual(view);
+  const finalSnapshot = await request.get("/api/v1/snapshot", { headers });
+  expect(await finalSnapshot.json()).toEqual(before);
+});

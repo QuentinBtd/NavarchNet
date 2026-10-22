@@ -222,3 +222,119 @@ it("renders provider-controlled names, statuses and reference literals as inert 
   expect(root.querySelectorAll("img,script")).toHaveLength(0);
   expect(original(root)).toEqual(r);
 });
+
+function filterText(root: HTMLElement, value: string) {
+  const input = root.querySelector<HTMLInputElement>('input[type="search"]');
+  if (!input) throw new Error("Saved literal filter missing");
+  input.value = value;
+  input.dispatchEvent(new Event("input"));
+}
+
+it("filters only literal ID or own Name while preserving original identity and whole-capture ambiguity", () => {
+  const a = record("same-ID"),
+    b = record("same-ID", "nat_gateway");
+  a.tags.Name = "Name <img src=x> é";
+  b.state = "failed";
+  const data = capture([a, b, record(" space ")]),
+    before = structuredClone(data);
+  const root = mount(data);
+  filterText(root, "<img src=x> é");
+  expect(
+    [...root.querySelectorAll<HTMLElement>("[data-record-index]")].map((n) => n.dataset.recordIndex),
+  ).toEqual(["0"]);
+  expect(original(root)).toEqual(a);
+  expect(root.querySelector("aside")?.textContent).toContain("not unique across captured records");
+  expect(root.querySelector("img")).toBeNull();
+  filterText(root, "name");
+  expect(root.querySelectorAll("[data-record-index]")).toHaveLength(0);
+  expect(root.querySelector("aside pre")).toBeNull();
+  expect(root.textContent).toContain("No resource absence is inferred");
+  filterText(root, "same-ID");
+  select(root, "nat_gateway");
+  expect(original(root)).toEqual(b);
+  expect(root.querySelector("aside")?.textContent).toContain("not unique across captured records");
+  select(root, "all");
+  filterText(root, " space ");
+  expect(original(root)).toEqual(data.resources[2]);
+  filterText(root, "  space  ");
+  expect(root.querySelectorAll("[data-record-index]")).toHaveLength(0);
+  filterText(root, "");
+  expect(root.querySelectorAll("[data-record-index]")).toHaveLength(3);
+  expect(data).toEqual(before);
+});
+
+it("resets continuation and visible selection on each text or kind change without dropping matching rows", () => {
+  const data = capture([
+    record("vpc"),
+    ...Array.from({ length: 52 }, (_, i) => record(`nat-${i}`, "nat_gateway")),
+  ]);
+  const root = mount(data);
+  const more = () =>
+    [...root.querySelectorAll<HTMLButtonElement>("button")].find(
+      (b) => b.textContent === "Show more captured records",
+    );
+  filterText(root, "nat-");
+  more()?.click();
+  more()?.click();
+  expect(
+    [...root.querySelectorAll<HTMLElement>("[data-record-index]")].map((n) => Number(n.dataset.recordIndex)),
+  ).toEqual(Array.from({ length: 52 }, (_, i) => i + 1));
+  choose(root, 52);
+  expect(original(root)).toEqual(data.resources[52]);
+  filterText(root, "nat-5");
+  expect(
+    [...root.querySelectorAll<HTMLElement>("[data-record-index]")].map((n) => n.dataset.recordIndex),
+  ).toEqual(["6", "51", "52"]);
+  expect(root.querySelector('[aria-pressed="true"]')?.getAttribute("data-record-index")).toBe("6");
+  filterText(root, "nat-");
+  expect(root.querySelectorAll("[data-record-index]")).toHaveLength(24);
+  select(root, "vpc");
+  expect(root.querySelectorAll("[data-record-index]")).toHaveLength(0);
+  filterText(root, "");
+  expect(original(root)).toEqual(data.resources[0]);
+});
+
+it("retains typing focus and selection while retiring earlier controls and lazy records", () => {
+  let current = true;
+  const root = mount(
+    capture([record("vpc"), ...Array.from({ length: 52 }, (_, i) => record(`nat-${i}`, "nat_gateway"))]),
+    () => current,
+  );
+  const oldSearch = root.querySelector<HTMLInputElement>('input[type="search"]');
+  const oldSelect = root.querySelector<HTMLSelectElement>("select");
+  const oldNode = root.querySelector<HTMLButtonElement>('[data-record-index="0"]');
+  const oldDetails = root.querySelector<HTMLDetailsElement>("aside details");
+  const oldMore = [...root.querySelectorAll<HTMLButtonElement>("button")].find(
+    (b) => b.textContent === "Show more captured records",
+  );
+  if (!oldSearch) throw new Error("Search missing");
+  oldSearch.value = "nat-";
+  oldSearch.setSelectionRange(1, 3);
+  oldSearch.dispatchEvent(new Event("input"));
+  const live = root.querySelector<HTMLInputElement>('input[type="search"]');
+  expect(document.activeElement).toBe(live);
+  expect([live?.selectionStart, live?.selectionEnd]).toEqual([1, 3]);
+  oldSearch.value = "vpc";
+  oldSearch.dispatchEvent(new Event("input"));
+  if (oldSelect) {
+    oldSelect.value = "vpc";
+    oldSelect.dispatchEvent(new Event("change"));
+  }
+  oldNode?.click();
+  oldMore?.click();
+  if (oldDetails) {
+    oldDetails.open = true;
+    oldDetails.dispatchEvent(new Event("toggle"));
+  }
+  expect(oldDetails?.querySelector("pre")).toBeNull();
+  expect(root.querySelectorAll("[data-record-index]")).toHaveLength(24);
+  expect(original(root).id).toBe("nat-0");
+  current = false;
+  filterText(root, "vpc");
+  expect(root.querySelector("aside h4")?.textContent).toContain("nat-0");
+  root.remove();
+  current = true;
+  filterText(root, "");
+  expect(root.querySelectorAll("[data-record-index]")).toHaveLength(24);
+  expect(root.querySelector("aside h4")?.textContent).toContain("nat-0");
+});
