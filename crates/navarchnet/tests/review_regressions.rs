@@ -51,6 +51,54 @@ async fn finish(store: &Store) -> anyhow::Result<()> {
 }
 
 #[tokio::test]
+async fn ambiguous_selected_inventory_refuses_plan_creation_and_apply_without_persisted_changes()
+-> anyhow::Result<()> {
+    let store = isolated().await?;
+    let request = setup(&store).await?;
+    let original_plan = store.create_plan("admin", request.clone()).await?;
+    let body: serde_json::Value =
+        sqlx::query_scalar("SELECT body FROM inventory WHERE account_id=$1")
+            .bind(&request.account_id)
+            .fetch_one(&store.pool)
+            .await?;
+    let mut inventory: Inventory = serde_json::from_value(body)?;
+    assert_eq!(inventory.revision, original_plan.inventory_revision);
+    let mut duplicate = inventory.subnets[0].clone();
+    duplicate.route_table = "rtb-conflicting-literal".into();
+    inventory.subnets.push(duplicate);
+    let changed = sqlx::query("UPDATE inventory SET body=$1 WHERE account_id=$2")
+        .bind(serde_json::to_value(&inventory)?)
+        .bind(&request.account_id)
+        .execute(&store.pool)
+        .await?;
+    assert_eq!(changed.rows_affected(), 1);
+    let fingerprint = || async {
+        sqlx::query_scalar::<_, serde_json::Value>("SELECT jsonb_build_object('inventory',(SELECT jsonb_agg(to_jsonb(i) ORDER BY account_id) FROM inventory i),'plans',(SELECT jsonb_agg(to_jsonb(p) ORDER BY id) FROM plans p),'scopes',(SELECT jsonb_agg(to_jsonb(s) ORDER BY id) FROM scopes s),'connections',(SELECT jsonb_agg(to_jsonb(c) ORDER BY scope) FROM desired_connections c),'operations',(SELECT jsonb_agg(to_jsonb(o) ORDER BY id) FROM operations o),'events',(SELECT jsonb_agg(to_jsonb(e) ORDER BY id) FROM step_events e),'effects',(SELECT jsonb_agg(to_jsonb(f) ORDER BY scope,action_key) FROM fake_effects f),'audit',(SELECT jsonb_agg(to_jsonb(a) ORDER BY id) FROM audit a))")
+            .fetch_one(&store.pool).await
+    };
+    let before = fingerprint().await?;
+    let error = store
+        .create_plan("admin", request)
+        .await
+        .expect_err("Ambiguous selected inventory must not create another immutable plan");
+    assert!(error.to_string().contains("ambiguous"), "{error}");
+    assert_eq!(before, fingerprint().await?);
+    let error = store
+        .apply("admin", &original_plan.id, Fault::None)
+        .await
+        .expect_err(
+            "Apply must revalidate ambiguity even when the inventory revision is unchanged",
+        );
+    assert!(error.to_string().contains("ambiguous"), "{error}");
+    assert_eq!(before, fingerprint().await?);
+    assert_eq!(
+        serde_json::to_value(&original_plan)?,
+        serde_json::to_value(store.plan(&original_plan.id).await?)?
+    );
+    Ok(())
+}
+
+#[tokio::test]
 async fn drift_detection_matches_simulated_resource_keys_not_only_bodies() -> anyhow::Result<()> {
     for add_alias in [false, true] {
         let store = isolated().await?;

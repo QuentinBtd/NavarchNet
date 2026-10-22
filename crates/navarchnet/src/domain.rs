@@ -211,11 +211,14 @@ pub fn plan(
     let mut selected = Vec::new();
     for id in &request.subnet_ids {
         ensure!(ids.insert(id), "Duplicate subnet");
-        let subnet = inventory
-            .subnets
-            .iter()
-            .find(|s| &s.id == id)
+        let mut candidates = inventory.subnets.iter().filter(|s| &s.id == id);
+        let subnet = candidates
+            .next()
             .context("Subnet was not discovered in the selected VPC")?;
+        ensure!(
+            candidates.next().is_none(),
+            "Selected subnet identity is ambiguous in discovered VPC inventory"
+        );
         ensure!(
             zones.insert(&subnet.az_id),
             "Only one attachment subnet per AZ is allowed"

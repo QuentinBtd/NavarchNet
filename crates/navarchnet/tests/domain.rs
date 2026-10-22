@@ -58,6 +58,48 @@ fn rejects_overlap_ipv6_and_unsupported_connectivity() {
     assert!(plan(&inventory, &network, &request).is_err());
 }
 
+#[test]
+fn selected_subnet_identity_must_be_unique_in_discovered_inventory() {
+    let (inventory, network, request) = fixture();
+    let expected = serde_json::to_value(plan(&inventory, &network, &request).unwrap()).unwrap();
+    let mut reversed = inventory.clone();
+    reversed.subnets.reverse();
+    assert_eq!(
+        expected,
+        serde_json::to_value(plan(&reversed, &network, &request).unwrap()).unwrap()
+    );
+    let mut single = request.clone();
+    single.subnet_ids.truncate(1);
+    let mut unrelated = inventory.clone();
+    unrelated.subnets.push(inventory.subnets[1].clone());
+    assert_eq!(
+        serde_json::to_value(plan(&inventory, &network, &single).unwrap()).unwrap(),
+        serde_json::to_value(plan(&unrelated, &network, &single).unwrap()).unwrap(),
+        "Duplicate unselected rows must not change the selected unique subnet's plan"
+    );
+    for variant in ["identical", "different route", "unmanaged route"] {
+        let mut duplicate = inventory.subnets[0].clone();
+        if variant == "different route" {
+            duplicate.route_table = "rtb-conflicting-literal".into();
+        }
+        if variant == "unmanaged route" {
+            duplicate.default_route_managed = false;
+        }
+        for reverse in [false, true] {
+            let mut ambiguous = inventory.clone();
+            ambiguous.subnets.push(duplicate.clone());
+            if reverse {
+                ambiguous.subnets.reverse();
+            }
+            let before = serde_json::to_value(&ambiguous).unwrap();
+            let error = plan(&ambiguous, &network, &request)
+                .expect_err("Duplicate discovered subnet IDs must never select a first row");
+            assert!(error.to_string().contains("ambiguous"), "{error}");
+            assert_eq!(before, serde_json::to_value(&ambiguous).unwrap());
+        }
+    }
+}
+
 proptest! {
     #[test]
     fn all_generated_plans_preserve_activation_order(n in 1usize..=2) {
