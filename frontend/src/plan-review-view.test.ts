@@ -142,3 +142,29 @@ it("keeps literal plan/provider values inert and handles an empty returned histo
   expect(empty.node.querySelector("article")).toBeNull();
   expect(empty.makeApply).not.toHaveBeenCalled();
 });
+
+it("shows only the selected immutable request's account and every ordered literal subnet without joining inventory", () => {
+  const older = plan("older"),
+    other = plan("other");
+  older.request.account_id = "account-<img src=x>";
+  older.request.subnet_ids = [" subnet-repeated ", "<script>literal</script>", " subnet-repeated ", ""];
+  other.request.account_id = "unselected-account";
+  other.request.subnet_ids = ["unselected-subnet"];
+  const plans = [other, older],
+    before = structuredClone(plans);
+  const { node, makeApply } = mount(plans, older.id);
+  const comparison = node.querySelector('[aria-label="Plan impact comparison"]');
+  expect(comparison?.getAttribute("data-plan-id")).toBe(older.id);
+  expect(comparison?.getAttribute("data-plan-digest")).toBe(older.digest);
+  expect(comparison?.querySelector("[data-request-account]")?.textContent).toBe(older.request.account_id);
+  expect(
+    [...(comparison?.querySelectorAll("[data-request-subnets] li") ?? [])].map((n) => n.textContent),
+  ).toEqual(older.request.subnet_ids);
+  expect(comparison?.textContent).not.toContain("unselected-account");
+  expect(comparison?.textContent).not.toContain("unselected-subnet");
+  expect(comparison?.textContent).toContain("Original route targets are not stored in this plan");
+  expect(comparison?.querySelectorAll("img,script,form,input,button,select")).toHaveLength(0);
+  expect(makeApply).toHaveBeenCalledWith(older);
+  expect(JSON.parse(node.querySelector("details pre")?.textContent ?? "null")).toEqual(older);
+  expect(plans).toEqual(before);
+});

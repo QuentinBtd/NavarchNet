@@ -55,6 +55,21 @@ function renderImpact(plan: Plan): HTMLElement {
       `${plan.request.subnet_ids.length} selected attachment subnets · ${plan.actions.length} planned actions.`,
     ),
   );
+  const requestScope = document.createElement("dl");
+  const account = text("dd", plan.request.account_id);
+  account.dataset.requestAccount = "";
+  const subnets = document.createElement("ul");
+  subnets.dataset.requestSubnets = "";
+  for (const id of plan.request.subnet_ids) subnets.append(text("li", id));
+  const subnetValues = document.createElement("dd");
+  subnetValues.append(subnets);
+  requestScope.append(
+    text("dt", "Requested account registration"),
+    account,
+    text("dt", "Requested attachment subnets"),
+    subnetValues,
+  );
+  proposed.append(requestScope);
   proposed.append(
     text(
       "p",

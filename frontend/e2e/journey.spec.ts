@@ -234,6 +234,33 @@ test("real browser: register, discover, plan, apply, observe drift and partial f
   await page.getByRole("button", { name: "Sign out" }).click();
   await expect(page.locator("#workspace")).toBeHidden();
   await expect(page.locator("#account-list")).toBeEmpty();
+
+  // Original mutation/drift/history/logout assertions above stay unchanged.
+  // Review exact persisted request scope as a reader, not current inventory or inferred routes.
+  await page.goto("/#/plans");
+  await page
+    .getByLabel("Demo token or OIDC access token")
+    .fill("browser-test-reader-credential-free-local-only");
+  await page.getByRole("button", { name: "Connect", exact: true }).click();
+  await expect(page.locator("#plans")).toBeVisible();
+  await page.getByLabel("Plan to review", { exact: true }).selectOption(firstSaved.id);
+  const exactImpact = page.getByRole("region", { name: "Plan impact comparison", exact: true });
+  await expect(exactImpact).toHaveAttribute("data-plan-id", firstSaved.id);
+  await expect(exactImpact).toHaveAttribute("data-plan-digest", firstSaved.digest);
+  expect(firstSaved.request.subnet_ids.length).toBeGreaterThan(0);
+  // Real returned immutable plan established before the missing visible-scope RED.
+  await expect(exactImpact.getByText("Requested attachment subnets", { exact: true })).toBeVisible();
+  await expect(exactImpact.locator("[data-request-account]")).toHaveText(firstSaved.request.account_id);
+  expect(await exactImpact.locator("[data-request-subnets] li").allTextContents()).toEqual(
+    firstSaved.request.subnet_ids,
+  );
+  await expect(exactImpact).toContainText("Original route targets are not stored in this plan");
+  await expect(page.getByRole("button", { name: "Apply reviewed plan", exact: true })).toBeDisabled();
+  await page.setViewportSize({ width: 1440, height: 1080 });
+  await exactImpact.screenshot({ path: testInfo.outputPath("plan-request-scope-desktop.png") });
+  await page.setViewportSize({ width: 390, height: 844 });
+  expect(await page.evaluate(() => document.documentElement.scrollWidth <= innerWidth)).toBe(true);
+  await exactImpact.screenshot({ path: testInfo.outputPath("plan-request-scope-mobile.png") });
 });
 
 test("read-only session cannot mutate through UI or API", async ({ page, request }) => {
