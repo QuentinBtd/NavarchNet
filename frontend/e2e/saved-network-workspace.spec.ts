@@ -358,4 +358,45 @@ test("real browser: saved map filters loaded records by literal ID without new r
   expect(await after.json()).toEqual(view);
   const finalSnapshot = await request.get("/api/v1/snapshot", { headers });
   expect(await finalSnapshot.json()).toEqual(before);
+
+  // All original saved-map filtering, nonmutation and snapshot assertions above remain unchanged.
+  const subnets = view.topology.resources.flatMap((resource, index) =>
+    resource.kind === "subnet" ? [{ resource, index }] : [],
+  );
+  expect(subnets.length).toBeGreaterThan(0);
+  for (const [position, { resource, index }] of subnets.entries()) {
+    const returned = view.subnet_route_tables.filter((row) => row.subnet_id === resource.id);
+    expect(returned).toHaveLength(1);
+    expect(returned[0].vpc_id).toBe(resource.vpc_id);
+    expect(view.topology.resources.filter((row) => row.id === resource.id)).toHaveLength(1);
+    await map.getByLabel("Observed resource kind", { exact: true }).selectOption("subnet");
+    await map.locator(`button[data-record-index="${index}"]`).click();
+    const calculated = inspector.locator("[data-captured-subnet-table]");
+    await expect(
+      calculated.getByText("Calculated table selection from this capture", { exact: true }),
+    ).toBeVisible();
+    await expect(calculated).toContainText(
+      `Capture ${view.topology.id} · completed ${view.topology.completed_at}`,
+    );
+    const selection = returned[0].selection;
+    if (selection.status === "selected") {
+      await expect(calculated).toContainText(`Selected table: ${selection.route_table_id}`);
+      await expect(calculated).toContainText(`Association source: ${selection.source}`);
+    } else await expect(calculated).toContainText(`Selection unresolved: ${selection.reason}`);
+    await expect(calculated).toContainText("Not a destination-route decision, health check or verified path");
+    if (position === 0)
+      for (const [width, height, label] of [
+        [1440, 1080, "desktop"],
+        [390, 844, "mobile"],
+      ] as const) {
+        await page.setViewportSize({ width, height });
+        expect(await page.evaluate(() => document.documentElement.scrollWidth <= innerWidth)).toBe(true);
+        await map.screenshot({ path: testInfo.outputPath(`saved-map-subnet-table-${label}.png`) });
+      }
+  }
+  expect(calls).toEqual([]);
+  const readback = await request.get(url, { headers });
+  expect(await readback.json()).toEqual(view);
+  const coreReadback = await request.get("/api/v1/snapshot", { headers });
+  expect(await coreReadback.json()).toEqual(before);
 });

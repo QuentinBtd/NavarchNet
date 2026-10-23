@@ -35,6 +35,7 @@ export function renderAwsTopology(
   const workspace: HTMLElement = renderSavedAwsWorkspace(
     topology,
     () => (!options.isCurrent || options.isCurrent()) && root.isConnected && root.contains(workspace),
+    view,
   );
   root.append(workspace);
   const sourceCidr = options.onSourceCidrCoverage ? captureSourceCidrContext(topology) : undefined;

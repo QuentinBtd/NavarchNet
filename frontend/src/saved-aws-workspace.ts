@@ -1,5 +1,5 @@
 import { renderCapturedRouteRecords } from "./captured-route-records";
-import type { AwsTopology, ResourceKind } from "./generated";
+import type { AwsTopology, ResourceKind, TopologyView } from "./generated";
 import { renderNatMetadata } from "./nat-metadata-view";
 import { text } from "./view";
 
@@ -78,8 +78,32 @@ function valid(topology: AwsTopology): boolean {
 const reported = (value: string | null) =>
   value === null ? "Not reported" : value === "" ? "Empty reported value" : value;
 
-// Taxonomy-only projection of one original saved capture. It derives no links, scope ownership or path.
-export function renderSavedAwsWorkspace(topology: AwsTopology, isCurrent: () => boolean): HTMLElement {
+type TableContext = Pick<TopologyView, "topology" | "subnet_route_tables">;
+function validatedTableRows(topology: AwsTopology, context?: TableContext) {
+  if (context?.topology !== topology || !Array.isArray(context.subnet_route_tables)) return;
+  const rows = context.subnet_route_tables;
+  for (let i = 0; i < rows.length; i++) {
+    const row = rows[i];
+    if (!Object.hasOwn(rows, i) || !row || !scalar(row.subnet_id) || !nullable(row.vpc_id) || !row.selection)
+      return;
+    const selection = row.selection;
+    if (selection.status === "selected") {
+      if (
+        !scalar(selection.route_table_id) ||
+        !["explicit_subnet", "implicit_main"].includes(selection.source)
+      )
+        return;
+    } else if (selection.status !== "unresolved" || !scalar(selection.reason)) return;
+  }
+  return rows;
+}
+
+// Kind grouping plus capture-bound returned calculations; no links, scope ownership or path are inferred.
+export function renderSavedAwsWorkspace(
+  topology: AwsTopology,
+  isCurrent: () => boolean,
+  context?: TableContext,
+): HTMLElement {
   const root = document.createElement("div");
   root.className = "saved-map-workspace";
   root.setAttribute("role", "region");
@@ -95,6 +119,7 @@ export function renderSavedAwsWorkspace(topology: AwsTopology, isCurrent: () => 
   }
   root.dataset.topologyId = topology.id;
   root.dataset.completedAt = topology.completed_at;
+  const tableRows = validatedTableRows(topology, context);
   const counts = new Map<string, number>();
   for (const record of topology.resources) counts.set(record.id, (counts.get(record.id) ?? 0) + 1);
   let filter = "all",
@@ -221,6 +246,34 @@ export function renderSavedAwsWorkspace(topology: AwsTopology, isCurrent: () => 
         record.public_ips.length ? record.public_ips.map(reported).join(", ") : "None reported",
       );
       inspector.append(fields);
+      if (record.kind === "subnet") {
+        const calculated = document.createElement("div");
+        calculated.dataset.capturedSubnetTable = "";
+        calculated.append(
+          text("strong", "Calculated table selection from this capture"),
+          text("p", `Capture ${topology.id} · completed ${topology.completed_at}`),
+        );
+        const matches = tableRows?.filter((row) => row.subnet_id === record.id);
+        const row =
+          matches?.length === 1 && counts.get(record.id) === 1 && matches[0].vpc_id === record.vpc_id
+            ? matches[0]
+            : undefined;
+        if (!row)
+          calculated.append(
+            text(
+              "p",
+              "Calculated table selection unavailable or ambiguous for this original record. Refresh the saved observation.",
+            ),
+          );
+        else if (row.selection.status === "selected")
+          calculated.append(
+            text("p", `Selected table: ${row.selection.route_table_id}`),
+            text("p", `Association source: ${row.selection.source}`),
+          );
+        else calculated.append(text("p", `Selection unresolved: ${row.selection.reason}`));
+        calculated.append(text("p", "Not a destination-route decision, health check or verified path."));
+        inspector.append(calculated);
+      }
       if ((counts.get(record.id) ?? 0) !== 1)
         inspector.append(
           text("p", "This ID is not unique across captured records. No record correlation is established."),

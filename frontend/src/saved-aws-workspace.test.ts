@@ -445,3 +445,116 @@ it("saved-map NAT tuples are lazy capture-bound complete and retired with their 
     expect(node.querySelector("li")).toBeNull();
   }
 });
+
+it("displays capture-bound returned subnet selections without inventing a route or choosing the first row", () => {
+  const a = record(" subnet-<img src=x> ", "subnet"),
+    b = record("other", "subnet"),
+    c = record("unresolved", "subnet");
+  for (const item of [a, b, c]) item.vpc_id = "literal-vpc";
+  const data = capture([a, b, c]),
+    before = structuredClone(data);
+  const context: NonNullable<Parameters<typeof renderSavedAwsWorkspace>[2]> = {
+    topology: data,
+    subnet_route_tables: [
+      {
+        subnet_id: c.id,
+        vpc_id: c.vpc_id,
+        selection: { status: "unresolved", reason: "missing_route_table" },
+      },
+      {
+        subnet_id: b.id,
+        vpc_id: b.vpc_id,
+        selection: { status: "selected", route_table_id: "main-table", source: "implicit_main" },
+      },
+      {
+        subnet_id: a.id,
+        vpc_id: a.vpc_id,
+        selection: { status: "selected", route_table_id: "rtb-<img src=x>", source: "explicit_subnet" },
+      },
+    ],
+  };
+  let current = true;
+  const root = renderSavedAwsWorkspace(data, () => current, context);
+  document.body.append(root);
+  const panel = () => root.querySelector("aside [data-captured-subnet-table]");
+  expect(panel()?.textContent).toContain("Selected table: rtb-<img src=x>");
+  expect(panel()?.textContent).toContain("Association source: explicit_subnet");
+  expect(original(root)).toEqual(a);
+  choose(root, 1);
+  expect(panel()?.textContent).toContain("Selected table: main-table");
+  expect(panel()?.textContent).toContain("Association source: implicit_main");
+  choose(root, 2);
+  expect(panel()?.textContent).toContain("Selection unresolved: missing_route_table");
+  expect(panel()?.textContent).toContain(`Capture ${data.id} · completed ${data.completed_at}`);
+  expect(panel()?.textContent).toContain("Not a destination-route decision, health check or verified path");
+  current = false;
+  choose(root, 0);
+  root.remove();
+  current = true;
+  choose(root, 0);
+  expect(panel()?.textContent).toContain("Selection unresolved: missing_route_table");
+  expect(root.querySelector("img,script,form,a")).toBeNull();
+  expect(data).toEqual(before);
+});
+
+it("keeps unavailable ambiguous or malformed subnet calculations unknown without hiding the original record", () => {
+  // Typed callback contract negatives, not malformed public HTTP acceptance.
+  const subnet = record("subnet", "subnet");
+  subnet.vpc_id = "vpc";
+  const data = capture([subnet]);
+  type Context = NonNullable<Parameters<typeof renderSavedAwsWorkspace>[2]>;
+  const row: Context["subnet_route_tables"][number] = {
+    subnet_id: "subnet",
+    vpc_id: "vpc",
+    selection: { status: "selected", route_table_id: "must-not-display", source: "implicit_main" },
+  };
+  const context: Context = { topology: data, subnet_route_tables: [row] };
+  const cases: (Context | undefined)[] = [
+    undefined,
+    { ...context, topology: structuredClone(data) },
+    { ...context, subnet_route_tables: [] },
+    { ...context, subnet_route_tables: [row, structuredClone(row)] },
+    { ...context, subnet_route_tables: [{ ...row, vpc_id: "different-vpc" }] },
+    { ...context, subnet_route_tables: [{ ...row, subnet_id: " subnet " }] },
+    {
+      ...context,
+      subnet_route_tables: [
+        { ...row, selection: { status: "selected", route_table_id: "bad", source: "future" as never } },
+      ],
+    },
+  ];
+  for (const inherited of [false, true]) {
+    const rows = Array.from({ length: 61 }, (_, i) => (i === 0 ? row : { ...row, subnet_id: `other-${i}` }));
+    const item = rows[50];
+    delete rows[50];
+    if (inherited) {
+      const proto = Object.create(Array.prototype);
+      proto[50] = item;
+      Object.setPrototypeOf(rows, proto);
+    }
+    cases.push({ ...context, subnet_route_tables: rows });
+  }
+  const tail = Array.from({ length: 61 }, (_, i) => (i === 0 ? row : { ...row, subnet_id: `other-${i}` }));
+  tail[60] = {
+    ...row,
+    subnet_id: "bad",
+    selection: { status: "selected", route_table_id: null as unknown as string, source: "implicit_main" },
+  };
+  cases.push({ ...context, subnet_route_tables: tail });
+  for (const candidate of cases) {
+    const root = renderSavedAwsWorkspace(data, () => true, candidate);
+    document.body.append(root);
+    const panel = root.querySelector("aside [data-captured-subnet-table]");
+    expect(panel?.textContent).toContain("unavailable or ambiguous");
+    expect(panel?.textContent).not.toContain("Selected table:");
+    expect(original(root)).toEqual(subnet);
+  }
+  for (const kind of ["subnet", "nat_gateway"] as const) {
+    const duplicate = capture([subnet, record(subnet.id, kind)]);
+    const root = renderSavedAwsWorkspace(duplicate, () => true, { ...context, topology: duplicate });
+    document.body.append(root);
+    expect(root.querySelector("aside [data-captured-subnet-table]")?.textContent).toContain(
+      "unavailable or ambiguous",
+    );
+  }
+});
