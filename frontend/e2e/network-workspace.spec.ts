@@ -158,4 +158,64 @@ test("real API simulation inventory has a scoped network map and read-only inspe
     allow_application_traffic: false,
   });
   await expect(page.locator("#plan-list article")).toHaveAttribute("data-plan-id", body.id);
+
+  // All original whole-VPC handoff assertions above remain unchanged.
+  // The existing real inventory's second subnet differs from all-subnet defaults.
+  expect(inventory.subnets.length).toBeGreaterThan(1);
+  const selectedSubnet = inventory.subnets[inventory.subnets.length - 1];
+  await page
+    .getByRole("navigation", { name: "Workspace" })
+    .getByRole("link", { name: "Regional networks", exact: true })
+    .click();
+  await page.getByLabel("Regional network in workspace", { exact: true }).selectOption(network.id);
+  await page
+    .getByLabel("VPC in workspace", { exact: true })
+    .selectOption(JSON.stringify([account.id, inventory.vpc_id]));
+  await page.getByRole("button", { name: `Inspect subnet ${selectedSubnet.id}`, exact: true }).click();
+  await inspector.getByText("Original returned data", { exact: true }).click();
+  expect(JSON.parse((await inspector.locator("pre").textContent()) ?? "null")).toEqual(selectedSubnet);
+  const selectedAction = page.getByRole("button", { name: "Configure selected subnet", exact: true });
+  await expect(selectedAction).toBeVisible();
+  await expect(
+    inspector
+      .locator("dt")
+      .filter({ hasText: /^Subnet ID$/ })
+      .locator("+ dd"),
+  ).toHaveText(selectedSubnet.id);
+  for (const [width, height, label] of [
+    [1440, 1000, "desktop"],
+    [390, 844, "mobile"],
+  ] as const) {
+    await page.setViewportSize({ width, height });
+    expect(await page.evaluate(() => document.documentElement.scrollWidth <= innerWidth)).toBe(true);
+    await page.screenshot({ path: testInfo.outputPath(`map-subnet-handoff-${label}.png`), fullPage: true });
+  }
+  const beforeCalls = localCalls.length;
+  await selectedAction.click();
+  await expect(page.locator("#connection-configure")).toBeVisible();
+  expect(
+    await page
+      .locator("#subnets input:checked")
+      .evaluateAll((nodes) => nodes.map((n) => (n as HTMLInputElement).value)),
+  ).toEqual([selectedSubnet.id]);
+  await expect(page.locator("#subnets input")).toHaveCount(inventory.subnets.length);
+  await expect(page.getByLabel("Discovered VPC", { exact: true })).toHaveValue(inventory.vpc_id);
+  await expect(page.getByLabel("Regional egress network", { exact: true })).toHaveValue(network.id);
+  expect(localCalls).toHaveLength(beforeCalls);
+  const subsetSaved = page.waitForResponse(
+    (r) => r.request().method() === "POST" && new URL(r.url()).pathname === "/api/v1/plans",
+  );
+  await page.getByRole("button", { name: "Generate immutable change plan", exact: true }).click();
+  const subsetResponse = await subsetSaved;
+  expect(subsetResponse.status()).toBe(200);
+  const subsetPlan = await subsetResponse.json();
+  expect(subsetPlan.request).toEqual({
+    account_id: account.id,
+    vpc_id: inventory.vpc_id,
+    subnet_ids: [selectedSubnet.id],
+    network_id: network.id,
+    allow_application_traffic: false,
+  });
+  expect(subsetPlan.id).not.toBe(body.id);
+  await expect(page.locator("#plan-list article")).toHaveAttribute("data-plan-id", subsetPlan.id);
 });

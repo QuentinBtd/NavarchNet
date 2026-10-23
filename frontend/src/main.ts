@@ -168,7 +168,7 @@ function renderNetworkContext() {
       get canConfigure() {
         return isAdmin();
       },
-      onConfigure: (inventory, network) => {
+      onConfigure: (inventory, network, subnet) => {
         if (!isCurrent() || !isAdmin()) return;
         const inventories = source.inventory.filter((i) => i.vpc_id === inventory.vpc_id);
         const networks = source.networks.filter((n) => n.id === network.id);
@@ -181,6 +181,9 @@ function renderNetworkContext() {
           inventories[0] !== inventory ||
           networks.length !== 1 ||
           networks[0] !== network ||
+          (subnet !== undefined &&
+            (!inventory.subnets.includes(subnet) ||
+              inventory.subnets.filter((s) => s.id === subnet.id).length !== 1)) ||
           !uniqueOption(vpc, inventory.vpc_id) ||
           !uniqueOption(egress, network.id)
         ) {
@@ -191,6 +194,9 @@ function renderNetworkContext() {
         vpc.value = inventory.vpc_id;
         egress.value = network.id;
         renderSubnets();
+        if (subnet)
+          for (const input of element("subnets").querySelectorAll<HTMLInputElement>('input[name="subnet"]'))
+            input.checked = input.value === subnet.id;
         connectionStep(true);
         navigation.navigate("connections");
       },

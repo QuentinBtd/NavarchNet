@@ -1667,3 +1667,83 @@ it("snapshot replacement retires pending plan publication even when connection i
   expect(vi.mocked(fetch).mock.calls.length).toBe(calls);
   expect(document.querySelector("#notice")?.textContent).toBe(notice);
 });
+
+it("main preselects only the inspected subnet and preserves explicit whole-VPC configuration", async () => {
+  const data = handoffState(),
+    row = data.inventory[1].subnets[0],
+    picked = { ...row, id: " subnet-b-extra " };
+  data.inventory[1].subnets.push(picked, { ...row, id: "last" });
+  window.history.replaceState(null, "", "/#/networks");
+  await boot(async () => {
+    throw new Error("No automatic subnet handoff request");
+  }, data);
+  handoffChoice("workspace-network", "net-b");
+  handoffChoice("workspace-vpc", JSON.stringify(["b", "vpc-b"]));
+  required(
+    document.querySelector<HTMLButtonElement>(`button[aria-label="Inspect subnet ${picked.id}"]`),
+  ).click();
+  const action = required(
+      [...document.querySelectorAll<HTMLButtonElement>("#network-list button")].find(
+        (b) => b.textContent === "Configure selected subnet",
+      ),
+    ),
+    calls = vi.mocked(fetch).mock.calls.length;
+  action.click();
+  expect(window.location.hash).toBe("#/connections");
+  expect(
+    [...document.querySelectorAll<HTMLInputElement>("#subnets input:checked")].map((i) => i.value),
+  ).toEqual([picked.id]);
+  expect(document.querySelectorAll("#subnets input")).toHaveLength(3);
+  expect(required(document.querySelector<HTMLSelectElement>("#vpc")).value).toBe("vpc-b");
+  expect(required(document.querySelector<HTMLSelectElement>("#network")).value).toBe("net-b");
+  window.location.hash = "#/networks";
+  window.dispatchEvent(new HashChangeEvent("hashchange"));
+  handoffChoice("workspace-vpc", JSON.stringify(["a", "vpc-a"]));
+  action.click();
+  expect(window.location.hash).toBe("#/networks");
+  expect(
+    [...document.querySelectorAll<HTMLInputElement>("#subnets input:checked")].map((i) => i.value),
+  ).toEqual([picked.id]);
+  handoffChoice("workspace-vpc", JSON.stringify(["b", "vpc-b"]));
+  handoffButton().click();
+  expect(
+    [...document.querySelectorAll<HTMLInputElement>("#subnets input:checked")].map((i) => i.value),
+  ).toEqual(data.inventory[1].subnets.map((s) => s.id));
+  expect(vi.mocked(fetch).mock.calls.length).toBe(calls);
+});
+
+it("main refuses unrepresentable or read-only selected-subnet handoff without changing form or sending requests", async () => {
+  for (const variant of ["duplicate-vpc", "missing-vpc-option", "duplicate-network-option", "read-only"]) {
+    const data = handoffState();
+    if (variant === "duplicate-vpc") data.inventory[1].vpc_id = data.inventory[0].vpc_id;
+    if (variant === "read-only") data.role = "read_only";
+    window.history.replaceState(null, "", "/#/networks");
+    await boot(async () => {
+      throw new Error("Rejected subnet handoff must stay local");
+    }, data);
+    required(
+      document.querySelector<HTMLButtonElement>('button[aria-label="Inspect subnet subnet-a"]'),
+    ).click();
+    if (variant === "missing-vpc-option") required(document.querySelector("#vpc option")).remove();
+    if (variant === "duplicate-network-option")
+      required(document.querySelector("#network")).append(
+        required(document.querySelector("#network option")).cloneNode(true),
+      );
+    const form = required(document.querySelector("#plan-form")),
+      before = form.innerHTML,
+      calls = vi.mocked(fetch).mock.calls.length;
+    const action = required(
+      [...document.querySelectorAll<HTMLButtonElement>("#network-list button")].find(
+        (b) => b.textContent === "Configure selected subnet",
+      ),
+    );
+    if (variant === "read-only") expect(action.disabled).toBe(true);
+    action.disabled = false;
+    action.click();
+    expect(window.location.hash).toBe("#/networks");
+    expect(form.innerHTML).toBe(before);
+    expect(vi.mocked(fetch).mock.calls.length).toBe(calls);
+    if (variant !== "read-only")
+      expect(document.querySelector("#notice")?.textContent).toContain("cannot be represented uniquely");
+  }
+});

@@ -8,7 +8,7 @@ type Options = {
   isCurrent: () => boolean;
   onSelection: (selection: Selection) => void;
   canConfigure?: boolean;
-  onConfigure?: (inventory: Inventory, network: RegionalNetwork) => void;
+  onConfigure?: (inventory: Inventory, network: RegionalNetwork, subnet?: Subnet) => void;
 };
 type Resource = { kind: "network" } | { kind: "vpc" } | { kind: "subnet"; index: number };
 const inventoryKey = (i: Inventory) => JSON.stringify([i.account_id, i.vpc_id]);
@@ -241,6 +241,7 @@ export function renderNetworkWorkspace(data: Context, options: Options): HTMLEle
       const subnet = inventory.subnets[resource.index];
       original = subnet;
       title = `Subnet · ${subnet.az_id}`;
+      field("Subnet ID", subnet.id);
       field("Application account", account?.name ?? "Unknown");
       field("Parent VPC", inventory.vpc_id);
       field("Reported AZ ID", subnet.az_id);
@@ -291,6 +292,29 @@ export function renderNetworkWorkspace(data: Context, options: Options): HTMLEle
     const actions = document.createElement("div");
     actions.className = "network-map-actions";
     if (inventory && options.onConfigure) {
+      const subnet = resource.kind === "subnet" ? inventory.subnets[resource.index] : undefined;
+      if (subnet) {
+        const unique = () =>
+          inventory.subnets.includes(subnet) &&
+          inventory.subnets.filter((s) => s.id === subnet.id).length === 1;
+        const configureSubnet = text("button", "Configure selected subnet");
+        configureSubnet.type = "button";
+        configureSubnet.disabled = options.canConfigure !== true || !unique();
+        configureSubnet.onclick = () => {
+          if (
+            !configureSubnet.disabled &&
+            active(configureSubnet) &&
+            options.canConfigure === true &&
+            unique()
+          )
+            options.onConfigure?.(inventory, network, subnet);
+        };
+        if (!unique())
+          aside.append(
+            text("p", "Selected subnet identity is ambiguous. Refresh discovery or select a unique subnet."),
+          );
+        actions.append(configureSubnet);
+      }
       const configure = text("button", "Configure selected VPC");
       configure.type = "button";
       configure.disabled = options.canConfigure !== true;

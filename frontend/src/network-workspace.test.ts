@@ -222,3 +222,67 @@ it("hands off only the current exact map scope and rejects retired or downgraded
   disabled.click();
   expect(onConfigure).toHaveBeenCalledTimes(1);
 });
+
+it("selected-subnet handoff retains exact row identity and rejects ambiguity or retired permissions", async () => {
+  const data = state(),
+    inventory = data.inventory[0],
+    first = inventory.subnets[0];
+  inventory.subnets.push({ ...first, id: " <subnet-b> ", az_id: "az-b" });
+  const onConfigure = vi.fn();
+  let current = true,
+    allowed = true;
+  const root = renderNetworkWorkspace(data, {
+    selection: {},
+    isCurrent: () => current,
+    onSelection: () => {},
+    get canConfigure() {
+      return allowed;
+    },
+    onConfigure,
+  });
+  document.body.append(root);
+  expect(
+    [...root.querySelectorAll("button")].some((b) => b.textContent === "Configure selected subnet"),
+  ).toBe(false);
+  button(root, `Inspect subnet ${inventory.subnets[1].id}`).click();
+  expect(root.querySelector("aside dt")?.textContent).toBe("Subnet ID");
+  expect(root.querySelector("aside dd")?.textContent).toBe(inventory.subnets[1].id);
+  expect(root.querySelectorAll("img,script")).toHaveLength(0);
+  expect(await original(root)).toEqual(inventory.subnets[1]);
+  const old = button(root, "Configure selected subnet");
+  old.click();
+  expect(onConfigure).toHaveBeenCalledExactlyOnceWith(inventory, data.networks[0], inventory.subnets[1]);
+  button(root, `Inspect subnet ${first.id}`).click();
+  old.click();
+  const live = button(root, "Configure selected subnet");
+  allowed = false;
+  live.click();
+  allowed = true;
+  current = false;
+  live.click();
+  current = true;
+  root.remove();
+  live.click();
+  expect(onConfigure).toHaveBeenCalledTimes(1);
+  for (const duplicate of [true, false]) {
+    const repeated = state(),
+      row = repeated.inventory[0].subnets[0];
+    repeated.inventory[0].subnets.push({ ...row, id: duplicate ? row.id : "other" });
+    const rendered = renderNetworkWorkspace(repeated, {
+      selection: {},
+      isCurrent: () => true,
+      onSelection: () => {},
+      canConfigure: duplicate,
+      onConfigure,
+    });
+    document.body.append(rendered);
+    button(rendered, `Inspect subnet ${row.id}`).click();
+    const blocked = button(rendered, "Configure selected subnet");
+    expect(blocked.disabled).toBe(true);
+    blocked.disabled = false;
+    blocked.click();
+    expect(onConfigure).toHaveBeenCalledTimes(1);
+    if (duplicate)
+      expect(rendered.querySelector("aside")?.textContent).toContain("Selected subnet identity is ambiguous");
+  }
+});
