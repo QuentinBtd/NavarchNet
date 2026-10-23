@@ -2,7 +2,15 @@
 
 NavarchNet has an implemented fake-provider journey and a locally exercised AWS read-only account/topology slice, not a completed AWS V1 orchestrator. No live AWS API call/resource mutation, release/tag publication, crates.io upload or GHCR upload has occurred.
 
-## Current continuation — configure the inspected simulation subnet
+## Current continuation — retire obsolete apply-result navigation and selection
+
+Apply-result publication now checks its original session generation, snapshot and selected-plan view before starting its followup snapshot. The returned operation ID is committed only after that current followup succeeds, then the exact selected operation is rendered before navigation. An older admitted apply result cannot redirect a refreshed plan view, replace/unlock a newer pending apply or leave an obsolete operation selection that reappears on a later refresh. Already-admitted server work is not cancelled or rolled back and remains explicitly reviewable in returned history.
+
+Both apply and plan-generation followups now require the existing plan-view epoch to advance exactly once for their own successful refresh. An additional same-value snapshot replacement during that GET retires subsequent selection/navigation without self-retiring the valid ordinary followup. No new counter, request, UI control, form, graph, API, backend/session model, dependency or permission is introduced; payloads, explicit apply, roles, immutable identities/history and remote execution semantics are unchanged.
+
+Four new real-main/session deferred-fetch functions follow four executed RED→GREEN tracers: refreshed-view apply navigation theft, early operation-ID leakage through a retired followup, same-value refresh during apply followup, and the same gap in the sibling plan-generation path. Success/errors deliberately ignore abort; newer current apply, retired-control inertness and explicit older operation history remain usable. These are typed client fixtures, not a real server/native negative race or exactly-once proof. Original unit bytes and every native input remain unchanged. Fresh types/lint/build, 232 frontend cases and five unchanged current-server/real-PostgreSQL positive journeys pass; current desktop/mobile operation screenshots are inspected, not a visual redesign or race-native reproduction. Unchanged 190-Rust/runtime evidence is historical pre-review reuse; independent review, actual installed full hooks and remote backup remain separate. Zero new Rust/native functions, no live AWS/new Docker/final UX/full-mission claim.
+
+## Delivered checkpoint — configure the inspected simulation subnet
 
 The simulation map's subnet inspector now shows the exact selected subnet ID and offers an explicit `Configure selected subnet` action. It opens the existing guided configuration with only that subnet checked, keeping other returned subnets available for deliberate edits. The separate whole-VPC action still selects all returned subnets. Neither action sends an API request or generates/applies a plan automatically; existing generation, immutable review and application remain explicit.
 

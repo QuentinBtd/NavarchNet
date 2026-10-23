@@ -134,3 +134,136 @@ it("retains read-only enforcement and invalidates plan controls on logout", asyn
   expect(paths).toEqual([]);
   expect(document.querySelectorAll("#plan-list article")).toHaveLength(0);
 });
+
+const appliedFixture = (id: string, planId: string): Snapshot["operations"][number] => ({
+  id,
+  plan_id: planId,
+  scope: "scope",
+  status: "queued",
+  step: 0,
+  attempts: 0,
+  error: null,
+  fault: "none",
+});
+it("snapshot replacement retires an old apply result without stealing a newer pending apply", async () => {
+  for (const failed of [false, true]) {
+    const data = state(),
+      old = deferred(),
+      fresh = deferred(),
+      operation = appliedFixture("same-idempotent-operation", "new");
+    let posts = 0;
+    await boot(data, async () => (++posts === 1 ? old.promise : fresh.promise));
+    const retired = apply();
+    retired.click();
+    document.querySelector<HTMLButtonElement>("#refresh")?.click();
+    await vi.waitFor(() => expect(apply()).not.toBe(retired));
+    const current = apply();
+    current.click();
+    expect(posts).toBe(2);
+    const calls = vi.mocked(fetch).mock.calls.length;
+    const late = response(failed ? { error: "obsolete apply failure" } : operation, failed ? 409 : 200);
+    old.resolve(late);
+    await vi.waitFor(() => expect(late.bodyUsed).toBe(true));
+    await new Promise((done) => setTimeout(done, 0));
+    expect(window.location.hash).toBe("#/plans");
+    expect(current.isConnected).toBe(true);
+    expect(current.disabled).toBe(true);
+    expect(document.querySelector("#notice")?.textContent).toBe("Working…");
+    expect(vi.mocked(fetch).mock.calls.length).toBe(calls);
+    data.operations = [operation];
+    fresh.resolve(response(operation));
+    await vi.waitFor(() => expect(window.location.hash).toBe("#/operations"));
+    expect(document.querySelector("#operation-list article")?.getAttribute("data-operation-id")).toBe(
+      operation.id,
+    );
+  }
+});
+
+it("a retired apply followup cannot leave an operation selection that resurfaces on refresh", async () => {
+  const data = state(),
+    oldOperation = appliedFixture("old-apply-operation", "new"),
+    newest = appliedFixture("newer-history-operation", "old"),
+    reload = deferred(),
+    currentPost = deferred();
+  await boot(data, async () => {
+    throw new Error("Unexpected initial fixture request");
+  });
+  let reads = 0,
+    posts = 0;
+  vi.mocked(fetch).mockImplementation((input) => {
+    const path = String(input);
+    if (path === "/api/v1/snapshot") return ++reads === 1 ? reload.promise : Promise.resolve(response(data));
+    if (path === "/api/v1/plans/new/apply") {
+      posts++;
+      return Promise.resolve(response(oldOperation));
+    }
+    if (path === "/api/v1/plans/old/apply") {
+      posts++;
+      return currentPost.promise;
+    }
+    throw new Error(`Unexpected apply fixture path ${path}`);
+  });
+  const retired = apply();
+  retired.click();
+  await vi.waitFor(() => expect(reads).toBe(1));
+  select("old");
+  data.operations = [newest, oldOperation];
+  const late = response(data);
+  reload.resolve(late);
+  await vi.waitFor(() => expect(late.bodyUsed).toBe(true));
+  await new Promise((done) => setTimeout(done, 0));
+  expect(window.location.hash).toBe("#/plans");
+  document.querySelector<HTMLButtonElement>("#refresh")?.click();
+  await vi.waitFor(() =>
+    expect(document.querySelector("#operation-list article")?.getAttribute("data-operation-id")).toBe(
+      newest.id,
+    ),
+  );
+  expect(document.querySelector("#plan-list article")?.getAttribute("data-plan-id")).toBe("old");
+  apply().click();
+  expect(posts).toBe(2);
+  retired.disabled = false;
+  retired.click();
+  expect(posts).toBe(2);
+  currentPost.resolve(response(newest));
+  await vi.waitFor(() => expect(window.location.hash).toBe("#/operations"));
+  expect(document.querySelector("#operation-list article")?.getAttribute("data-operation-id")).toBe(
+    newest.id,
+  );
+  const history = document.querySelector<HTMLSelectElement>("#operation-selection");
+  if (!history) throw new Error("Missing operation history");
+  history.value = oldOperation.id;
+  history.dispatchEvent(new Event("change"));
+  expect(document.querySelector("#operation-list article")?.getAttribute("data-operation-id")).toBe(
+    oldOperation.id,
+  );
+});
+
+it("an intervening same-value refresh retires apply navigation during its followup snapshot", async () => {
+  const data = state(),
+    operation = appliedFixture("already-admitted-operation", "new"),
+    reload = deferred();
+  await boot(data, async () => {
+    throw new Error("Unexpected initial fixture request");
+  });
+  let reads = 0;
+  vi.mocked(fetch).mockImplementation((input) => {
+    const path = String(input);
+    if (path === "/api/v1/snapshot") return ++reads === 1 ? reload.promise : Promise.resolve(response(data));
+    if (path === "/api/v1/plans/new/apply") return Promise.resolve(response(operation));
+    throw new Error(`Unexpected fixture path ${path}`);
+  });
+  const retired = apply();
+  retired.click();
+  await vi.waitFor(() => expect(reads).toBe(1));
+  document.querySelector<HTMLButtonElement>("#refresh")?.click();
+  await vi.waitFor(() => expect(apply()).not.toBe(retired));
+  expect(window.location.hash).toBe("#/plans");
+  const late = response(data);
+  reload.resolve(late);
+  await vi.waitFor(() => expect(late.bodyUsed).toBe(true));
+  await new Promise((done) => setTimeout(done, 0));
+  expect(window.location.hash).toBe("#/plans");
+  expect(document.querySelector("#plan-list article")?.getAttribute("data-plan-id")).toBe("new");
+  expect(vi.mocked(fetch).mock.calls.filter(([path]) => String(path).endsWith("/apply"))).toHaveLength(1);
+});

@@ -1747,3 +1747,37 @@ it("main refuses unrepresentable or read-only selected-subnet handoff without ch
       expect(document.querySelector("#notice")?.textContent).toContain("cannot be represented uniquely");
   }
 });
+
+it("an intervening same-value refresh retires plan generation navigation during its followup", async () => {
+  const data = handoffState(),
+    plan = pendingPlanFixture(data),
+    reload = deferred();
+  window.history.replaceState(null, "", "/#/connections");
+  await boot(async () => {
+    throw new Error("Unexpected initial fixture request");
+  }, data);
+  let reads = 0;
+  vi.mocked(fetch).mockImplementation((input) => {
+    const path = String(input);
+    if (path === "/api/v1/snapshot") return ++reads === 1 ? reload.promise : Promise.resolve(response(data));
+    if (path === "/api/v1/plans") return Promise.resolve(response(plan));
+    throw new Error(`Unexpected fixture path ${path}`);
+  });
+  required(document.querySelector<HTMLButtonElement>("#configure-connection")).click();
+  await vi.waitFor(() =>
+    expect(required(document.querySelector<HTMLElement>("#connection-configure")).hidden).toBe(false),
+  );
+  const checkbox = required(document.querySelector<HTMLInputElement>("#subnets input"));
+  required(document.querySelector("#plan-form")).dispatchEvent(new Event("submit", { cancelable: true }));
+  await vi.waitFor(() => expect(reads).toBe(1));
+  data.plans = [plan];
+  required(document.querySelector<HTMLButtonElement>("#refresh")).click();
+  await vi.waitFor(() => expect(checkbox.isConnected).toBe(false));
+  expect(document.querySelector("#notice")?.textContent).toContain("Updated.");
+  const late = response(data);
+  reload.resolve(late);
+  await vi.waitFor(() => expect(late.bodyUsed).toBe(true));
+  await new Promise((done) => setTimeout(done, 0));
+  expect(window.location.hash).toBe("#/connections");
+  expect(vi.mocked(fetch).mock.calls.filter(([path]) => String(path) === "/api/v1/plans")).toHaveLength(1);
+});

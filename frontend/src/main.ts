@@ -223,10 +223,16 @@ function renderPlans(plans: Plan[]) {
         button(
           "Apply reviewed plan",
           async () => {
+            const generation = session.version;
+            const source = snapshot;
             const body: ApplyPlan = { fault: element<HTMLSelectElement>("fault").value as Fault };
             const operation = await request<Operation>(`/plans/${plan.id}/apply`, body);
-            selectedOperationId = operation.id;
+            if (generation !== session.version || snapshot !== source || !isCurrent()) return;
             await refresh();
+            // The followup retires this draw once; an intervening refresh retires it again.
+            if (generation !== session.version || planViewVersion !== version + 1) return;
+            selectedOperationId = operation.id;
+            renderOperations(snapshot?.operations ?? []);
             navigation.navigate("operations");
           },
           true,
@@ -674,8 +680,9 @@ element<HTMLFormElement>("plan-form").onsubmit = (event) => {
       };
       const plan = await request<Plan>("/plans", body);
       if (version !== session.version || snapshot !== source) return;
+      const viewVersion = planViewVersion;
       await refresh();
-      if (version !== session.version) return;
+      if (version !== session.version || planViewVersion !== viewVersion + 1) return;
       selectedPlanId = plan.id;
       renderPlans(snapshot?.plans ?? []);
       navigation.navigate("plans");
