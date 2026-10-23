@@ -7,6 +7,7 @@ type Options = {
   onSelect: (id: string) => void;
   makeInspect: (operation: Operation) => HTMLButtonElement;
   makeDrift?: (operation: Operation) => HTMLButtonElement;
+  onReviewPlan?: (plan: Plan) => void;
 };
 
 export function renderOperationReview(operations: Operation[], plans: Plan[], options: Options): HTMLElement {
@@ -76,6 +77,20 @@ export function renderOperationReview(operations: Operation[], plans: Plan[], op
     ),
   );
   if (operation.error) card.append(text("p", operation.error));
+  if (options.onReviewPlan) {
+    const review = text("button", "Review original plan");
+    review.type = "button";
+    review.disabled = !plan;
+    review.onclick = () => {
+      if (!review.disabled && plan && root.isConnected && root.contains(review) && options.isCurrent())
+        options.onReviewPlan?.(plan);
+    };
+    card.append(review);
+    if (!plan)
+      card.append(
+        text("p", "Original plan unavailable or ambiguous in returned history. Refresh to look for it."),
+      );
+  }
   const technical = document.createElement("details");
   technical.append(
     text("summary", "Technical operation identifiers & persisted state"),

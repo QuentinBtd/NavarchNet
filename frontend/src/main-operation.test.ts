@@ -227,3 +227,80 @@ it("never exposes the demo drift control outside demo authentication mode", asyn
   await boot(async () => response([]), state);
   expect(document.querySelector("#operation-list")?.textContent).not.toContain("Simulate external drift");
 });
+
+const operationPlan = (id: string): Snapshot["plans"][number] => ({
+  id,
+  scope: "scope",
+  scope_version: 1,
+  inventory_revision: 1,
+  network_revision: 1,
+  digest: `digest-${id}`,
+  request: {
+    account_id: "account",
+    vpc_id: "vpc",
+    subnet_ids: ["subnet"],
+    network_id: "network",
+    allow_application_traffic: false,
+  },
+  actions: [{ kind: "attachment", target: "vpc", requires: [], postcondition: "simulated available" }],
+});
+function reviewOriginal() {
+  const control = [...document.querySelectorAll<HTMLButtonElement>("#operation-list button")].find(
+    (b) => b.textContent === "Review original plan",
+  );
+  if (!control) throw new Error("Missing original-plan review");
+  return control;
+}
+it("reader reviews the selected operation's exact original plan locally while retiring pending inspection", async () => {
+  const data = snapshot(),
+    pending = deferred();
+  data.role = "read_only";
+  const plan = operationPlan("plan-new");
+  data.plans = [operationPlan("unrelated-first-plan"), plan];
+  await boot(async (path) => {
+    if (path.endsWith("/observation")) return pending.promise;
+    throw new Error(`Unexpected review request ${path}`);
+  }, data);
+  const before = structuredClone(data);
+  inspect().click();
+  const calls = vi.mocked(fetch).mock.calls.length;
+  const retired = reviewOriginal();
+  expect(retired.disabled).toBe(false);
+  retired.click();
+  expect(window.location.hash).toBe("#/plans");
+  expect(document.querySelector("#plan-list article")?.getAttribute("data-plan-id")).toBe(plan.id);
+  expect(
+    document.querySelector('[aria-label="Plan impact comparison"]')?.getAttribute("data-plan-digest"),
+  ).toBe(plan.digest);
+  expect(document.querySelector<HTMLButtonElement>("#plan-list article button")?.disabled).toBe(true);
+  retired.click();
+  const late = response(observation("new", "retired review inspection"));
+  pending.resolve(late);
+  await vi.waitFor(() => expect(late.bodyUsed).toBe(true));
+  await new Promise((done) => setTimeout(done, 0));
+  expect(window.location.hash).toBe("#/plans");
+  expect(document.querySelector("#observation")?.textContent).toBe("");
+  expect(document.querySelector("#notice")?.textContent).not.toContain("retired review inspection");
+  expect(vi.mocked(fetch).mock.calls.length).toBe(calls);
+  expect(data).toEqual(before);
+});
+it("unavailable original-plan history never navigates to an unrelated or first duplicate plan", async () => {
+  for (const duplicate of [false, true]) {
+    const data = snapshot(),
+      plan = operationPlan("plan-new");
+    data.plans = duplicate ? [plan, { ...plan }] : [operationPlan("unrelated-plan")];
+    await boot(async () => {
+      throw new Error("Unavailable plan review must not request anything");
+    }, data);
+    const calls = vi.mocked(fetch).mock.calls.length,
+      control = reviewOriginal();
+    expect(control.disabled).toBe(true);
+    control.disabled = false;
+    control.click();
+    expect(window.location.hash).toBe("#/operations");
+    expect(document.querySelector("#operation-list")?.textContent).toContain(
+      "Original plan unavailable or ambiguous",
+    );
+    expect(vi.mocked(fetch).mock.calls.length).toBe(calls);
+  }
+});

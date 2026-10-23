@@ -261,6 +261,47 @@ test("real browser: register, discover, plan, apply, observe drift and partial f
   await page.setViewportSize({ width: 390, height: 844 });
   expect(await page.evaluate(() => document.documentElement.scrollWidth <= innerWidth)).toBe(true);
   await exactImpact.screenshot({ path: testInfo.outputPath("plan-request-scope-mobile.png") });
+
+  // All original journey and exact request-scope assertions above remain unchanged.
+  // A different preselected plan makes an accidental generic/default navigation observable.
+  expect(secondOperation.plan_id).toBe(secondSaved.id);
+  expect(secondSaved.id).not.toBe(firstSaved.id);
+  await page
+    .getByRole("navigation", { name: "Workspace" })
+    .getByRole("link", { name: "Operations", exact: true })
+    .click();
+  await expect(page.locator("#operations")).toBeVisible();
+  await page.getByLabel("Operation to inspect", { exact: true }).selectOption(secondOperation.id);
+  await expect(page.locator("#operation-list article")).toHaveAttribute(
+    "data-operation-id",
+    secondOperation.id,
+  );
+  const originalPlanAction = page.getByRole("button", { name: "Review original plan", exact: true });
+  await expect(originalPlanAction).toBeVisible();
+  await expect(originalPlanAction).toBeEnabled();
+  const reviewCalls: string[] = [];
+  page.on("request", (r) => {
+    if (r.url().includes("/api/v1/")) reviewCalls.push(r.url());
+  });
+  await originalPlanAction.click();
+  await expect(page.locator("#plans")).toBeVisible();
+  await expect(exactImpact).toHaveAttribute("data-plan-id", secondSaved.id);
+  await expect(exactImpact).toHaveAttribute("data-plan-digest", secondSaved.digest);
+  await expect(exactImpact.locator("[data-request-account]")).toHaveText(secondSaved.request.account_id);
+  expect(await exactImpact.locator("[data-request-subnets] li").allTextContents()).toEqual(
+    secondSaved.request.subnet_ids,
+  );
+  await expect(exactImpact).toContainText("Original route targets are not stored in this plan");
+  await expect(page.getByRole("button", { name: "Apply reviewed plan", exact: true })).toBeDisabled();
+  expect(reviewCalls).toEqual([]);
+  for (const [width, height, label] of [
+    [1440, 1080, "desktop"],
+    [390, 844, "mobile"],
+  ] as const) {
+    await page.setViewportSize({ width, height });
+    expect(await page.evaluate(() => document.documentElement.scrollWidth <= innerWidth)).toBe(true);
+    await exactImpact.screenshot({ path: testInfo.outputPath(`operation-plan-handoff-${label}.png`) });
+  }
 });
 
 test("read-only session cannot mutate through UI or API", async ({ page, request }) => {

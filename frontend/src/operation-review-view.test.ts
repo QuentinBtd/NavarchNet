@@ -73,3 +73,65 @@ it("retains literal inert state, permits drift only for terminal status and reti
   const empty = mount([]);
   expect(empty.makeInspect).not.toHaveBeenCalled();
 });
+
+const originalPlan = (id: string): Parameters<typeof renderOperationReview>[1][number] => ({
+  id,
+  scope: "scope",
+  scope_version: 1,
+  inventory_revision: 1,
+  network_revision: 1,
+  digest: `digest-${id}`,
+  request: {
+    account_id: "account",
+    vpc_id: "vpc",
+    subnet_ids: ["subnet"],
+    network_id: "network",
+    allow_application_traffic: false,
+  },
+  actions: [{ kind: "attachment", target: "vpc", requires: [], postcondition: "simulated available" }],
+});
+it("reviews only the exact original plan and leaves missing or ambiguous history unavailable", () => {
+  const op = { ...operation(" <literal> "), step: 1 },
+    plan = originalPlan(op.plan_id),
+    other = originalPlan("other");
+  const onReviewPlan = vi.fn();
+  let current = true;
+  const mountReview = (plans: (typeof plan)[]) => {
+    const root = renderOperationReview([op], plans, {
+      isCurrent: () => current,
+      onSelect: () => {},
+      makeInspect: () => document.createElement("button"),
+      onReviewPlan,
+    });
+    document.body.append(root);
+    return root;
+  };
+  const root = mountReview([other, plan]),
+    review = root.querySelector<HTMLButtonElement>("article button");
+  if (!review) throw new Error("Missing original-plan action");
+  expect(review.textContent).toBe("Review original plan");
+  expect(review.disabled).toBe(false);
+  expect(root.querySelector("img,script")).toBeNull();
+  review.click();
+  expect(onReviewPlan).toHaveBeenCalledExactlyOnceWith(plan);
+  current = false;
+  review.click();
+  current = true;
+  review.remove();
+  review.click();
+  root.append(review);
+  root.remove();
+  review.click();
+  expect(onReviewPlan).toHaveBeenCalledTimes(1);
+  for (const values of [[], [plan, { ...plan }]]) {
+    const unavailable = mountReview(values),
+      blocked = unavailable.querySelector<HTMLButtonElement>("article button");
+    if (!blocked) throw new Error("Missing unavailable action");
+    expect(blocked.disabled).toBe(true);
+    blocked.disabled = false;
+    blocked.click();
+    expect(onReviewPlan).toHaveBeenCalledTimes(1);
+    expect(unavailable.textContent).toContain("Original plan unavailable or ambiguous in returned history");
+    expect(unavailable.querySelector("h3")?.textContent).toContain("plan total unavailable");
+  }
+});

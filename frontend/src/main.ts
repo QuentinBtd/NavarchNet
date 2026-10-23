@@ -247,6 +247,7 @@ function clearOperationEvidence() {
   element("operation-events-details").removeAttribute("open");
 }
 function renderOperations(operations: Operation[]) {
+  const source = snapshot;
   const version = ++operationViewVersion;
   if (selectedOperationId === undefined) selectedOperationId = operations[0]?.id;
   clearOperationEvidence();
@@ -289,6 +290,15 @@ function renderOperations(operations: Operation[]) {
     renderOperationReview(operations, snapshot?.plans ?? [], {
       selectedOperationId,
       isCurrent,
+      onReviewPlan: (plan) => {
+        if (!source || !isCurrent() || snapshot !== source) return;
+        const matches = source.plans.filter((p) => p.id === plan.id);
+        if (matches.length !== 1 || matches[0] !== plan) return;
+        session.retireRequests();
+        selectedPlanId = plan.id;
+        renderPlans(source.plans);
+        navigation.navigate("plans");
+      },
       onSelect: (id) => {
         if (!isCurrent()) return;
         session.retireRequests();
