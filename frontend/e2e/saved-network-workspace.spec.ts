@@ -170,6 +170,71 @@ test("real browser: map inspector retains original saved VPC and TGW route entri
   expect(writes).toEqual([]);
   await page.getByRole("button", { name: "Sign out", exact: true }).click();
   await expect(page.locator("#aws-topology")).toBeEmpty();
+
+  // All original route-completeness, provenance, nonmutation and logout assertions stay unchanged.
+  await page
+    .getByLabel("Demo token or OIDC access token")
+    .fill("browser-test-reader-credential-free-local-only");
+  await page.getByRole("button", { name: "Connect", exact: true }).click();
+  await page
+    .locator("#aws-account-list li")
+    .filter({ hasText: account.name })
+    .getByRole("button", { name: "View saved AWS observation", exact: true })
+    .click();
+  await expect(map).toHaveAttribute("data-topology-id", view.topology.id);
+  const filterCalls: string[] = [];
+  page.on("request", (r) => {
+    if (r.url().includes("/api/v1/")) filterCalls.push(r.url());
+  });
+  for (const { kind, index, record, routes } of records) {
+    const destinations =
+      kind === "route_table"
+        ? record.routes.map((r) => r.ipv4_destination)
+        : (record.tgw_routes ?? []).map((r) => r.destination_cidr);
+    const expected = destinations.flatMap((d, i) => (d === "0.0.0.0/0" ? [i] : []));
+    expect(expected.length).toBeGreaterThan(0);
+    expect(expected.length).toBeLessThan(routes.length);
+    await map.getByLabel("Observed resource kind", { exact: true }).selectOption(kind);
+    await map.locator(`button[data-record-index="${index}"]`).click();
+    const inspector = map.getByRole("complementary", { name: "Saved AWS record inspector" });
+    await inspector.getByText("Reported route entries", { exact: true }).click();
+    const detail = inspector.locator("details[data-captured-route-entries]");
+    const defaults = detail.getByRole("button", { name: "Show reported IPv4 defaults", exact: true });
+    await expect(defaults).toBeVisible();
+    await defaults.click();
+    const rows = detail.locator("li[data-route-index]");
+    expect(
+      await rows.evaluateAll((nodes) => nodes.map((n) => Number((n as HTMLElement).dataset.routeIndex))),
+    ).toEqual(expected);
+    for (const originalIndex of expected) {
+      const row = detail.locator(`li[data-route-index="${originalIndex}"]`);
+      await expect(row).toHaveAttribute("value", String(originalIndex + 1));
+      await row.getByText("Original route record", { exact: true }).click();
+      expect(JSON.parse(await row.locator("pre").innerText())).toEqual(routes[originalIndex]);
+      await row.getByText("Original route record", { exact: true }).click();
+    }
+    await expect(detail).toContainText("literal 0.0.0.0/0");
+    await expect(detail).toContainText("Not effective routing or measured traffic");
+    for (const [width, height, label] of [
+      [1440, 1080, "desktop"],
+      [390, 844, "mobile"],
+    ] as const) {
+      await page.setViewportSize({ width, height });
+      expect(await page.evaluate(() => document.documentElement.scrollWidth <= innerWidth)).toBe(true);
+      await map.screenshot({ path: testInfo.outputPath(`captured-default-${kind}-${label}.png`) });
+    }
+    await detail.getByRole("button", { name: "Show all captured routes", exact: true }).click();
+    await expect(rows).toHaveCount(routes.length);
+    expect(
+      await rows.evaluateAll((nodes) => nodes.map((n) => Number((n as HTMLElement).dataset.routeIndex))),
+    ).toEqual(routes.map((_, i) => i));
+  }
+  expect(filterCalls).toEqual([]);
+  expect(writes).toEqual([]);
+  expect(await saved()).toEqual(view);
+  const finalSnapshot = await request.get("/api/v1/snapshot", { headers });
+  expect(finalSnapshot.status()).toBe(200);
+  expect(await finalSnapshot.json()).toEqual(before);
 });
 
 test("real browser: saved map filters loaded records by literal ID without new reads", async ({

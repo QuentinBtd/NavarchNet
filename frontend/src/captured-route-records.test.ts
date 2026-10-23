@@ -153,7 +153,7 @@ it("reveals all route rows in twelve-entry batches retaining original indexes wi
   const root = mount(value);
   open(root);
   expect(root.querySelectorAll("[data-route-index]")).toHaveLength(12);
-  const more = root.querySelector("button");
+  const more = root.querySelector<HTMLButtonElement>("button[data-captured-route-more]");
   if (!more) throw new Error("Continuation missing");
   more.click();
   open(root);
@@ -192,7 +192,7 @@ it("retires retained route continuations and lazy JSON when parent map selection
   const root = map.querySelector<HTMLDetailsElement>("[data-captured-route-entries]");
   if (!root) throw new Error("Selected route detail missing");
   open(root);
-  const more = root.querySelector("button"),
+  const more = root.querySelector<HTMLButtonElement>("button[data-captured-route-more]"),
     detail = root.querySelector<HTMLDetailsElement>("li details");
   map.querySelector<HTMLButtonElement>('[data-record-index="1"]')?.click();
   expect(map.contains(root)).toBe(false);
@@ -221,4 +221,88 @@ it("keeps unsupported resource kinds out and renders provider strings as inert l
   expect(root.textContent).toContain("<img src=x>");
   expect(root.querySelectorAll("img,script,a,form,input,select")).toHaveLength(0);
   expect(raw(root)).toEqual(value.routes[0]);
+});
+
+it("filters literal IPv4 defaults across the complete collection while preserving original indexes", () => {
+  const value = resource();
+  value.routes = Array.from({ length: 31 }, (_, i) => ({
+    ...route(i),
+    ipv4_destination: i % 2 === 1 ? "0.0.0.0/0" : `10.${i}.0.0/16`,
+  }));
+  value.routes[1].state = "blackhole";
+  value.routes[29].state = null;
+  value.routes[29].targets = { futureField: "<img src=x>" };
+  const before = structuredClone(value);
+  let current = true;
+  const root = mount(value, () => current);
+  open(root);
+  const filter = root.querySelector<HTMLButtonElement>("button[aria-pressed]"),
+    more = root.querySelector<HTMLButtonElement>("button[data-captured-route-more]"),
+    stale = root.querySelector<HTMLDetailsElement>('li[data-route-index="0"] details');
+  if (!filter || !more || !stale) throw new Error("Missing route controls");
+  const indexes = () =>
+    [...root.querySelectorAll<HTMLElement>("[data-route-index]")].map((n) => Number(n.dataset.routeIndex));
+  filter.click();
+  expect(indexes()).toEqual(Array.from({ length: 12 }, (_, i) => i * 2 + 1));
+  expect(filter.getAttribute("aria-pressed")).toBe("true");
+  open(stale);
+  expect(stale.querySelector("pre")).toBeNull();
+  more.click();
+  expect(indexes()).toEqual(Array.from({ length: 15 }, (_, i) => i * 2 + 1));
+  expect([...root.querySelectorAll<HTMLLIElement>("li[data-route-index]")].map((n) => n.value)).toEqual(
+    Array.from({ length: 15 }, (_, i) => i * 2 + 2),
+  );
+  expect(root.textContent).toContain("Showing 15 of 15");
+  expect(root.textContent).toContain("across 31 original rows, not effective routing");
+  expect(raw(root, 1)).toEqual(value.routes[1]);
+  expect(raw(root, 29)).toEqual(value.routes[29]);
+  expect(root.querySelector("img,script")).toBeNull();
+  filter.click();
+  expect(indexes()).toEqual(Array.from({ length: 12 }, (_, i) => i));
+  more.click();
+  more.click();
+  expect(indexes()).toEqual(Array.from({ length: 31 }, (_, i) => i));
+  filter.click();
+  current = false;
+  filter.click();
+  root.remove();
+  current = true;
+  filter.click();
+  expect(filter.getAttribute("aria-pressed")).toBe("true");
+  expect(value).toEqual(before);
+});
+
+it("default filtering preserves unknown and duplicate TGW rows without interpreting other destination fields", () => {
+  // Constructed typed callbacks only, not public API acceptance of malformed identifiers.
+  const value = resource("transit_gateway_route_table");
+  value.tgw_routes = [
+    tgw(),
+    { ...tgw(), destination_cidr: null, prefix_list_id: "0.0.0.0/0" },
+    { ...tgw(), destination_cidr: "::/0" },
+    { ...tgw(), destination_cidr: "0.0.0.1/0" },
+    { ...tgw(), state: null, route_type: "" },
+  ];
+  const root = mount(value);
+  open(root);
+  root.querySelector<HTMLButtonElement>("button[aria-pressed]")?.click();
+  expect(
+    [...root.querySelectorAll<HTMLElement>("[data-route-index]")].map((n) => n.dataset.routeIndex),
+  ).toEqual(["0", "4"]);
+  expect(raw(root, 0)).toEqual(value.tgw_routes[0]);
+  expect(raw(root, 4)).toEqual(value.tgw_routes[4]);
+  const none = mount();
+  open(none);
+  none.querySelector<HTMLButtonElement>("button[aria-pressed]")?.click();
+  expect(none.querySelector("li")).toBeNull();
+  expect(none.textContent).toContain("Showing 0 of 0 matching");
+  expect(none.textContent).toContain("across 1 original rows");
+  const malformed = resource();
+  malformed.routes = [
+    { ...route(), ipv4_destination: "0.0.0.0/0" },
+    { ...route(), origin: undefined as unknown as null },
+  ];
+  const rejected = mount(malformed);
+  open(rejected);
+  expect(rejected.textContent).toContain("malformed");
+  expect(rejected.querySelector("button,li")).toBeNull();
 });

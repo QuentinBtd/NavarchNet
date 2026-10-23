@@ -91,14 +91,22 @@ export function renderCapturedRouteRecords(
       count = text("p", ""),
       more = text("button", "Show more captured routes");
     more.type = "button";
+    more.dataset.capturedRouteMore = "";
+    const filter = text("button", "Show reported IPv4 defaults");
+    filter.type = "button";
+    filter.setAttribute("aria-pressed", "false");
+    let defaultsOnly = false;
+    let indexes = entries.map((_, index) => index);
     let shown = 0;
     const append = () => {
       if (!current(more)) return;
-      const end = Math.min(shown + 12, entries.length);
+      const end = Math.min(shown + 12, indexes.length);
       for (; shown < end; shown++) {
-        const original = entries[shown];
+        const index = indexes[shown];
+        const original = entries[index];
         const item = document.createElement("li");
-        item.dataset.routeIndex = String(shown);
+        item.dataset.routeIndex = String(index);
+        item.value = index + 1;
         if (vpc) {
           const row = original as ObservedRoute;
           item.append(
@@ -145,11 +153,29 @@ export function renderCapturedRouteRecords(
         item.append(detail);
         list.append(item);
       }
-      count.textContent = `Showing ${shown} of ${entries.length} captured route rows · original order, local batches, not a cloud total.`;
-      more.hidden = shown >= entries.length;
+      count.textContent = defaultsOnly
+        ? `Showing ${shown} of ${indexes.length} matching captured route rows · literal 0.0.0.0/0 filter across ${entries.length} original rows, not effective routing.`
+        : `Showing ${shown} of ${entries.length} captured route rows · original order, local batches, not a cloud total.`;
+      more.hidden = shown >= indexes.length;
+    };
+    filter.onclick = () => {
+      if (!current(filter)) return;
+      defaultsOnly = !defaultsOnly;
+      indexes = entries.flatMap((row, index) =>
+        !defaultsOnly ||
+        (vpc ? (row as ObservedRoute).ipv4_destination : (row as TransitGatewayRoute).destination_cidr) ===
+          "0.0.0.0/0"
+          ? [index]
+          : [],
+      );
+      shown = 0;
+      list.replaceChildren();
+      filter.textContent = defaultsOnly ? "Show all captured routes" : "Show reported IPv4 defaults";
+      filter.setAttribute("aria-pressed", String(defaultsOnly));
+      append();
     };
     more.onclick = append;
-    root.append(count, list, more);
+    root.append(filter, count, list, more);
     append();
   };
   return root;
