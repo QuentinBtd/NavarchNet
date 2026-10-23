@@ -27,8 +27,13 @@ function metadataShape(value: unknown): value is NatGatewayMetadata {
   return (
     record(value) &&
     nullableString(value.route_table_id) &&
-    (value.addresses === null || (Array.isArray(value.addresses) && value.addresses.every(address)))
+    (value.addresses === null || denseAddresses(value.addresses))
   );
+}
+function denseAddresses(value: unknown): value is NatGatewayAddress[] {
+  if (!Array.isArray(value)) return false;
+  for (let i = 0; i < value.length; i++) if (!Object.hasOwn(value, i) || !address(value[i])) return false;
+  return true;
 }
 
 export type SavedNatSnapshot = Readonly<
@@ -95,7 +100,7 @@ export function renderNatMetadata(
     more.dataset.natMore = "";
     let shown = 0;
     function appendBatch() {
-      if (!isCurrent()) return;
+      if (!isCurrent() || !detail.contains(more)) return;
       for (const address of addresses.slice(shown, shown + 50)) {
         const row = document.createElement("li");
         row.dataset.natAddress = "";
@@ -124,8 +129,8 @@ export function renderNatMetadata(
       more.hidden = shown >= addresses.length;
     }
     more.onclick = appendBatch;
-    appendBatch();
     detail.append(count, list, more);
+    appendBatch();
   };
   return detail;
 }

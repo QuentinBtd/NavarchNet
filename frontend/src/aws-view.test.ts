@@ -109,7 +109,7 @@ describe("read-only AWS observations", () => {
     };
     const before = JSON.stringify(view);
     const node = renderAwsTopology(view, { canConsent: false, onConsent: async () => {} });
-    const detail = node.querySelector<HTMLDetailsElement>("details[data-nat-metadata]");
+    const detail = node.querySelector<HTMLDetailsElement>("article details[data-nat-metadata]");
     if (!detail) throw new Error("Missing NAT metadata detail");
     expect(detail.querySelectorAll("[data-nat-address]")).toHaveLength(0);
     detail.open = true;
@@ -148,7 +148,7 @@ describe("read-only AWS observations", () => {
       resource.kind = "nat_gateway";
       resource.nat_gateway = metadata;
       const node = renderAwsTopology(view, { canConsent: false, onConsent: async () => {} });
-      const detail = node.querySelector<HTMLDetailsElement>("details[data-nat-metadata]");
+      const detail = node.querySelector<HTMLDetailsElement>("article details[data-nat-metadata]");
       if (!detail) throw new Error("Missing NAT metadata detail");
       detail.open = true;
       detail.dispatchEvent(new Event("toggle"));
@@ -183,7 +183,7 @@ describe("read-only AWS observations", () => {
       resource.kind = "nat_gateway";
       resource.nat_gateway = metadata as unknown as AwsResource["nat_gateway"];
       const node = renderAwsTopology(view, { canConsent: false, onConsent: async () => {} });
-      const detail = node.querySelector<HTMLDetailsElement>("details[data-nat-metadata]");
+      const detail = node.querySelector<HTMLDetailsElement>("article details[data-nat-metadata]");
       if (!detail) throw new Error("Missing NAT metadata detail");
       detail.open = true;
       detail.dispatchEvent(new Event("toggle"));
@@ -211,7 +211,7 @@ describe("read-only AWS observations", () => {
       })),
     };
     const node = renderAwsTopology(view, { canConsent: false, onConsent: async () => {} });
-    const detail = node.querySelector<HTMLDetailsElement>("details[data-nat-metadata]");
+    const detail = node.querySelector<HTMLDetailsElement>("article details[data-nat-metadata]");
     if (!detail) throw new Error("Missing NAT metadata detail");
     expect(detail.querySelectorAll("[data-nat-address]")).toHaveLength(0);
     detail.open = true;
@@ -247,7 +247,7 @@ describe("read-only AWS observations", () => {
       resource.kind = "nat_gateway";
       resource.nat_gateway = { route_table_id: "rtb-must-not-display", addresses: [] };
       const node = renderAwsTopology(view, { canConsent: false, onConsent: async () => {} });
-      const detail = node.querySelector<HTMLDetailsElement>("details[data-nat-metadata]");
+      const detail = node.querySelector<HTMLDetailsElement>("article details[data-nat-metadata]");
       if (!detail) throw new Error("Missing NAT metadata detail");
       detail.open = true;
       detail.dispatchEvent(new Event("toggle"));

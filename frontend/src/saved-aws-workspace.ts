@@ -1,5 +1,6 @@
 import { renderCapturedRouteRecords } from "./captured-route-records";
 import type { AwsTopology, ResourceKind } from "./generated";
+import { renderNatMetadata } from "./nat-metadata-view";
 import { text } from "./view";
 
 const kinds: Record<ResourceKind, string> = {
@@ -243,6 +244,10 @@ export function renderSavedAwsWorkspace(topology: AwsTopology, isCurrent: () => 
           original.append(text("pre", JSON.stringify(record, null, 2)));
       };
       inspector.append(original);
+      if (record.kind === "nat_gateway") {
+        const metadata = renderNatMetadata(record, topology, () => active(metadata));
+        inspector.append(metadata);
+      }
     } else inspector.append(text("p", "Select a captured record to inspect its original metadata."));
     layout.append(map, inspector);
     const more = text("button", "Show more captured records");

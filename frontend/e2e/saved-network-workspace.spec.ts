@@ -81,6 +81,57 @@ test("real browser: saved AWS records have a capture-bound map and readonly insp
   expect(writes).toEqual([]);
   await page.getByRole("button", { name: "Sign out", exact: true }).click();
   await expect(page.locator("#aws-topology")).toBeEmpty();
+
+  // All original saved-map, account replacement, nonmutation and logout assertions remain unchanged.
+  await page
+    .getByLabel("Demo token or OIDC access token")
+    .fill("browser-test-reader-credential-free-local-only");
+  await page.getByRole("button", { name: "Connect", exact: true }).click();
+  await open(account.name);
+  await expect(map).toHaveAttribute("data-topology-id", view.topology.id);
+  const calls: string[] = [];
+  page.on("request", (r) => {
+    if (r.url().includes("/api/v1/")) calls.push(r.url());
+  });
+  await map.getByLabel("Observed resource kind", { exact: true }).selectOption("nat_gateway");
+  await map.locator(`button[data-record-index="${index}"]`).click();
+  const metadata = inspector.locator("details[data-nat-metadata]");
+  await expect(metadata.getByText("Inspect reported NAT metadata", { exact: true })).toBeVisible();
+  await metadata.getByText("Inspect reported NAT metadata", { exact: true }).click();
+  await expect(metadata).toContainText(
+    `Saved snapshot: ${view.topology.id} · completed: ${view.topology.completed_at}`,
+  );
+  await expect(metadata).toContainText("not selected egress IPs, not NAT health or a selected traffic AZ");
+  const addresses = record.nat_gateway?.addresses;
+  if (!addresses) throw new Error("Saved address tuples missing");
+  const rows = metadata.locator("li[data-nat-address]");
+  await expect(rows).toHaveCount(addresses.length);
+  for (const [i, address] of addresses.entries()) {
+    await expect(rows.nth(i)).toContainText(
+      `Public IP: ${address.public_ip ?? "not reported"} · Private IP: ${address.private_ip ?? "not reported"}`,
+    );
+    await expect(rows.nth(i)).toContainText(
+      `AZ ID: ${address.az_id ?? "not reported"} · AZ name (account-specific): ${address.az_name ?? "not reported"}`,
+    );
+    await expect(rows.nth(i)).toContainText(
+      `Reported status: ${address.status ?? "not reported"} · Reported primary: ${address.is_primary ?? "not reported"}`,
+    );
+    await expect(rows.nth(i)).toContainText(
+      `Allocation: ${address.allocation_id ?? "not reported"} · Association: ${address.association_id ?? "not reported"} · Interface: ${address.network_interface_id ?? "not reported"}`,
+    );
+  }
+  for (const [width, height, label] of [
+    [1440, 1080, "desktop"],
+    [390, 844, "mobile"],
+  ] as const) {
+    await page.setViewportSize({ width, height });
+    expect(await page.evaluate(() => document.documentElement.scrollWidth <= innerWidth)).toBe(true);
+    await map.screenshot({ path: testInfo.outputPath(`saved-map-nat-tuples-${label}.png`) });
+  }
+  expect(calls).toEqual([]);
+  expect(writes).toEqual([]);
+  expect(await saved()).toEqual(view);
+  expect(await snapshot()).toEqual(before);
 });
 
 test("real browser: map inspector retains original saved VPC and TGW route entries", async ({

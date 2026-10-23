@@ -1,5 +1,6 @@
 import { afterEach, expect, it } from "vitest";
 import type { AwsResource, AwsTopology } from "./generated";
+import { renderNatMetadata } from "./nat-metadata-view";
 import { renderSavedAwsWorkspace } from "./saved-aws-workspace";
 
 const record = (id: string, kind: AwsResource["kind"] = "vpc"): AwsResource => ({
@@ -337,4 +338,110 @@ it("retains typing focus and selection while retiring earlier controls and lazy 
   filterText(root, "");
   expect(root.querySelectorAll("[data-record-index]")).toHaveLength(24);
   expect(root.querySelector("aside h4")?.textContent).toContain("nat-0");
+});
+
+function tupleNat(): AwsResource {
+  const nat = record("nat-<img src=x>", "nat_gateway");
+  nat.nat_gateway = {
+    route_table_id: "unvalidated-table",
+    addresses: Array.from({ length: 101 }, (_, i) => ({
+      allocation_id: null,
+      association_id: null,
+      network_interface_id: null,
+      public_ip: "203.0.113.9",
+      private_ip: "",
+      az_name: "account-specific-name",
+      az_id: null,
+      is_primary: i === 0 ? true : i === 1 ? false : null,
+      status: i === 0 ? "succeeded" : i === 1 ? "failed" : "future-<img src=x>",
+    })),
+  };
+  return nat;
+}
+function openNat(detail: HTMLDetailsElement) {
+  detail.open = true;
+  detail.dispatchEvent(new Event("toggle"));
+}
+
+it("rejects sparse and inherited NAT tuple tails before a valid-looking first batch", () => {
+  for (const inherited of [false, true]) {
+    const nat = tupleNat(),
+      addresses = nat.nat_gateway?.addresses;
+    if (!addresses) throw new Error("Fixture missing");
+    const item = addresses[80];
+    delete addresses[80];
+    if (inherited) {
+      const proto = Object.create(Array.prototype);
+      proto[80] = item;
+      Object.setPrototypeOf(addresses, proto);
+    }
+    const detail = renderNatMetadata(nat, capture());
+    document.body.append(detail);
+    openNat(detail);
+    expect(detail.querySelectorAll("[data-nat-address]")).toHaveLength(0);
+    expect(detail.textContent).toContain("malformed; no address tuples displayed");
+    expect(detail.querySelector("button[data-nat-more]")).toBeNull();
+  }
+});
+
+it("saved-map NAT tuples are lazy capture-bound complete and retired with their original inspector", () => {
+  const nat = tupleNat(),
+    data = capture([nat, record("other")]),
+    before = structuredClone(data),
+    root = mount(data);
+  const detail = root.querySelector<HTMLDetailsElement>("aside details[data-nat-metadata]");
+  if (!detail) throw new Error("Contextual NAT metadata missing");
+  expect(detail.querySelector("li")).toBeNull();
+  expect(original(root)).toEqual(nat);
+  openNat(detail);
+  expect(detail.textContent).toContain("Saved snapshot: saved-capture · completed: original-completed");
+  expect(detail.textContent).toContain("not selected egress IPs, not NAT health or a selected traffic AZ");
+  const more = detail.querySelector<HTMLButtonElement>("button[data-nat-more]");
+  if (!more) throw new Error("Continuation missing");
+  expect(detail.querySelectorAll("li[data-nat-address]")).toHaveLength(50);
+  choose(root, 1);
+  more.click();
+  expect(detail.querySelectorAll("li[data-nat-address]")).toHaveLength(50);
+  expect(root.querySelector("aside [data-nat-metadata]")).toBeNull();
+  choose(root, 0);
+  const live = root.querySelector<HTMLDetailsElement>("aside details[data-nat-metadata]");
+  if (!live) throw new Error("New inspector missing");
+  openNat(live);
+  const next = live.querySelector<HTMLButtonElement>("button[data-nat-more]");
+  if (!next) throw new Error("New continuation missing");
+  next.remove();
+  next.click();
+  expect(live.querySelectorAll("li[data-nat-address]")).toHaveLength(50);
+  live.append(next);
+  next.click();
+  next.click();
+  next.click();
+  openNat(live);
+  expect(live.querySelectorAll("li[data-nat-address]")).toHaveLength(101);
+  expect(live.textContent).toContain("Reported primary: false");
+  expect(live.textContent).toContain("future-<img src=x>");
+  expect(live.querySelector("img,script,a,input,form")).toBeNull();
+  expect(data).toEqual(before);
+  choose(root, 1);
+  choose(root, 0);
+  const retired = root.querySelector<HTMLDetailsElement>("aside details[data-nat-metadata]");
+  if (!retired) throw new Error("Unopened inspector missing");
+  root.remove();
+  openNat(retired);
+  expect(retired.querySelector("li")).toBeNull();
+  for (const [metadata, message] of [
+    [null, "NAT details not captured"],
+    [{ route_table_id: null, addresses: null }, "Address collection not reported"],
+    [{ route_table_id: null, addresses: [] }, "Reported address tuples: 0"],
+  ] as const) {
+    const value = record("nat", "nat_gateway");
+    value.nat_gateway = metadata as AwsResource["nat_gateway"];
+    const node = mount(capture([value])).querySelector<HTMLDetailsElement>(
+      "aside details[data-nat-metadata]",
+    );
+    if (!node) throw new Error("Unknown/empty metadata control missing");
+    openNat(node);
+    expect(node.textContent).toContain(message);
+    expect(node.querySelector("li")).toBeNull();
+  }
 });
