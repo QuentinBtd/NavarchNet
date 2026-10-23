@@ -1393,3 +1393,97 @@ it("main refuses ambiguous or missing form identities and read-only map handoff 
       expect(document.querySelector("#notice")?.textContent).toContain("cannot be represented uniquely");
   }
 });
+
+it("manual VPC selection never displays or configures the first ambiguous inventory row", async () => {
+  for (const identical of [false, true])
+    for (const reverse of [false, true]) {
+      const data = handoffState();
+      data.inventory[1] = identical
+        ? structuredClone(data.inventory[0])
+        : { ...data.inventory[1], vpc_id: data.inventory[0].vpc_id };
+      data.accounts.push({ ...data.accounts[0], id: "unique-account" });
+      data.inventory.push({
+        ...data.inventory[0],
+        account_id: "unique-account",
+        vpc_id: "vpc-unique",
+        subnets: [{ ...data.inventory[0].subnets[0], id: "subnet-unique" }],
+      });
+      if (reverse) data.inventory.reverse();
+      window.history.replaceState(null, "", "/#/connections");
+      await boot(async () => {
+        throw new Error("Ambiguous selection must not send a request");
+      }, data);
+      const vpc = required(document.querySelector<HTMLSelectElement>("#vpc"));
+      vpc.selectedIndex = 1;
+      vpc.dispatchEvent(new Event("change"));
+      expect(document.querySelectorAll("#subnets input")).toHaveLength(0);
+      const calls = vi.mocked(fetch).mock.calls.length;
+      required(document.querySelector<HTMLButtonElement>("#configure-connection")).click();
+      await vi.waitFor(() =>
+        expect(document.querySelector("#notice")?.textContent).toContain("unavailable or ambiguous"),
+      );
+      expect(required(document.querySelector<HTMLElement>("#connection-configure")).hidden).toBe(true);
+      required(document.querySelector("#plan-form")).dispatchEvent(new Event("submit", { cancelable: true }));
+      await vi.waitFor(() =>
+        expect(document.querySelector("#notice")?.textContent).toContain("unavailable or ambiguous"),
+      );
+      expect(vi.mocked(fetch).mock.calls.length).toBe(calls);
+      handoffChoice("vpc", "vpc-unique");
+      required(document.querySelector<HTMLButtonElement>("#configure-connection")).click();
+      await vi.waitFor(() =>
+        expect(required(document.querySelector<HTMLElement>("#connection-configure")).hidden).toBe(false),
+      );
+      expect([...document.querySelectorAll<HTMLInputElement>("#subnets input")].map((n) => n.value)).toEqual([
+        "subnet-unique",
+      ]);
+      expect(vi.mocked(fetch).mock.calls.length).toBe(calls);
+    }
+});
+
+it("manual plan submit rechecks uniqueness after refresh and recovers only for a unique selected VPC", async () => {
+  const data = handoffState();
+  window.history.replaceState(null, "", "/#/connections");
+  await boot(async () => {
+    throw new Error("No plan request may escape an ambiguous selection");
+  }, data);
+  handoffChoice("vpc", "vpc-a");
+  required(document.querySelector<HTMLButtonElement>("#configure-connection")).click();
+  await vi.waitFor(() =>
+    expect(required(document.querySelector<HTMLElement>("#connection-configure")).hidden).toBe(false),
+  );
+  expect([...document.querySelectorAll<HTMLInputElement>("#subnets input")].map((n) => n.value)).toEqual([
+    "subnet-a",
+  ]);
+  data.inventory[1].vpc_id = "vpc-a";
+  required(document.querySelector<HTMLButtonElement>("#refresh")).click();
+  await vi.waitFor(() => expect(document.querySelectorAll("#subnets input")).toHaveLength(0));
+  const calls = vi.mocked(fetch).mock.calls.length;
+  required(document.querySelector("#plan-form")).dispatchEvent(new Event("submit", { cancelable: true }));
+  await vi.waitFor(() =>
+    expect(document.querySelector("#notice")?.textContent).toContain("unavailable or ambiguous"),
+  );
+  expect(vi.mocked(fetch).mock.calls.length).toBe(calls);
+  data.inventory[1].vpc_id = "vpc-b";
+  required(document.querySelector<HTMLButtonElement>("#refresh")).click();
+  await vi.waitFor(() => expect(document.querySelectorAll("#subnets input")).toHaveLength(1));
+  const recoveredCalls = vi.mocked(fetch).mock.calls.length;
+  required(document.querySelector<HTMLButtonElement>("#connection-back")).click();
+  handoffChoice("vpc", "vpc-b");
+  required(document.querySelector<HTMLButtonElement>("#configure-connection")).click();
+  await vi.waitFor(() => expect(document.querySelector("#connection-step")?.textContent).toContain("vpc-b"));
+  expect([...document.querySelectorAll<HTMLInputElement>("#subnets input")].map((n) => n.value)).toEqual([
+    "subnet-b",
+  ]);
+  expect(vi.mocked(fetch).mock.calls.length).toBe(recoveredCalls);
+  required(document.querySelector<HTMLButtonElement>("#connection-back")).click();
+  const vpc = required(document.querySelector<HTMLSelectElement>("#vpc"));
+  vpc.selectedIndex = -1;
+  vpc.dispatchEvent(new Event("change"));
+  required(document.querySelector<HTMLButtonElement>("#configure-connection")).click();
+  await vi.waitFor(() =>
+    expect(document.querySelector("#notice")?.textContent).toContain("unavailable or ambiguous"),
+  );
+  expect(required(document.querySelector<HTMLElement>("#connection-configure")).hidden).toBe(true);
+  expect(document.querySelectorAll("#subnets input")).toHaveLength(0);
+  expect(vi.mocked(fetch).mock.calls.length).toBe(recoveredCalls);
+});

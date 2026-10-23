@@ -66,8 +66,10 @@ const navigation = createNavigation(app, () => {
     element(id).replaceChildren();
   element("operation-events-details").removeAttribute("open");
 });
-const selectedInventory = () =>
-  snapshot?.inventory.find((i) => i.vpc_id === element<HTMLSelectElement>("vpc").value);
+const selectedInventory = () => {
+  const matches = snapshot?.inventory.filter((i) => i.vpc_id === element<HTMLSelectElement>("vpc").value);
+  return matches?.length === 1 ? matches[0] : undefined;
+};
 const isAdmin = () => snapshot?.role === "admin";
 async function request<T>(path: string, body?: unknown): Promise<T> {
   return session.request<T>(path, body);
@@ -591,7 +593,8 @@ element<HTMLSelectElement>("vpc").onchange = renderSubnets;
 let configuringConnection = false;
 function connectionStep(configure: boolean) {
   const inventory = configure ? selectedInventory() : undefined;
-  if (configure && !inventory) throw new Error("Register and discover an account first");
+  if (configure && !inventory)
+    throw new Error("Selected VPC is unavailable or ambiguous. Refresh discovery or choose a unique VPC.");
   configuringConnection = configure;
   element("connection-select").hidden = configure;
   element("connection-configure").hidden = !configure;
@@ -631,7 +634,8 @@ element<HTMLFormElement>("plan-form").onsubmit = (event) => {
       return;
     }
     const inventory = selectedInventory();
-    if (!inventory) throw new Error("Register and discover an account first");
+    if (!inventory)
+      throw new Error("Selected VPC is unavailable or ambiguous. Refresh discovery or choose a unique VPC.");
     const body: ConnectionRequest = {
       account_id: inventory.account_id,
       vpc_id: inventory.vpc_id,
