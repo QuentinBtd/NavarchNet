@@ -61,8 +61,8 @@ description = "Run frontend behavior tests"
 run = "npm --prefix frontend test"
 
 [tasks.binary-contract-test]
-description = "Fast current-artifact receipt, shell-path and isolated browser fixture boundary tests"
-run = "node --test scripts/server-binary.test.mjs scripts/browser-fixture-server.test.mjs"
+description = "Fast artifact, isolated fixture and bounded smoke-wait contract tests"
+run = "node --test scripts/server-binary.test.mjs scripts/browser-fixture-server.test.mjs scripts/smoke-operation.test.mjs"
 
 [tasks.fixture-database-test]
 description = "Credential-free SQLx effective-endpoint/search-path fixture guards; no database connection"

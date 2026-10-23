@@ -2,6 +2,7 @@ import assert from "node:assert/strict";
 import { spawn, spawnSync } from "node:child_process";
 import { randomBytes } from "node:crypto";
 import { smokeBinary } from "./server-binary.mjs";
+import { waitForOperation } from "./smoke-operation.mjs";
 
 const database = process.env.DATABASE_URL;
 assert(database, "DATABASE_URL is required; real PostgreSQL must be reachable");
@@ -32,13 +33,11 @@ async function api(path, body, token = admin, status = 200) {
   assert.equal(response.status, status, `${path}: ${await response.clone().text()}`);
   return status === 204 ? undefined : response.json();
 }
-async function complete(id, expected) {
-  for (let i = 0; i < 150; i++) {
-    const op = await api(`/operations/${id}`);
-    if (["succeeded", "partial", "failed"].includes(op.status)) { assert.equal(op.status, expected); return op; }
-    await new Promise((r) => setTimeout(r, 100));
-  }
-  throw new Error(`Operation ${id} did not finish`);
+async function complete(id, expected, recovering = false) {
+  return waitForOperation(id, expected, () => api(`/operations/${id}`), {
+    recovering,
+    sleep: (ms) => new Promise((resolve) => setTimeout(resolve, ms)),
+  });
 }
 try {
   start(); await ready();
@@ -60,7 +59,7 @@ try {
   const beforeRestart = await api(`/operations/${operation.id}`);
   assert(beforeRestart.step < plan.actions.length, "Crash-recovery smoke must interrupt an unfinished operation");
   await stop("SIGKILL"); start(); await ready();
-  await complete(operation.id, "succeeded");
+  await complete(operation.id, "succeeded", true);
   assert.equal((await api(`/plans/${plan.id}/apply`, { fault: "none" })).id, operation.id);
   const observation = await api(`/operations/${operation.id}/observation`);
   assert.equal(observation.configuration, "simulated_converged");
