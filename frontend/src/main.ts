@@ -134,6 +134,7 @@ function renderSubnets() {
       input.name = "subnet";
       input.value = subnet.id;
       input.checked = true;
+      input.onchange = () => retireConnectionInput(input);
       label.append(
         input,
         document.createTextNode(
@@ -143,6 +144,13 @@ function renderSubnets() {
       return label;
     }),
   );
+}
+function retireConnectionInput(control: HTMLElement): boolean {
+  if (!control.isConnected || !element("plan-form").contains(control) || element("connect").hidden)
+    return false;
+  session.retireRequests();
+  element("notice").replaceChildren();
+  return true;
 }
 function renderNetworkContext() {
   const source = snapshot;
@@ -589,7 +597,12 @@ element<HTMLFormElement>("aws-register").onsubmit = (event) => {
     await refresh();
   });
 };
-element<HTMLSelectElement>("vpc").onchange = renderSubnets;
+const vpcChoice = element<HTMLSelectElement>("vpc");
+vpcChoice.onchange = () => {
+  if (retireConnectionInput(vpcChoice)) renderSubnets();
+};
+const networkChoice = element<HTMLSelectElement>("network");
+networkChoice.onchange = () => retireConnectionInput(networkChoice);
 let configuringConnection = false;
 function connectionStep(configure: boolean) {
   const inventory = configure ? selectedInventory() : undefined;
@@ -606,7 +619,10 @@ function connectionStep(configure: boolean) {
     : "1. Select VPC → 2. Configure → 3. Review plan";
 }
 element("configure-connection").onclick = () => void run(async () => connectionStep(true));
-element("connection-back").onclick = () => connectionStep(false);
+const connectionBack = element("connection-back");
+connectionBack.onclick = () => {
+  if (retireConnectionInput(connectionBack)) connectionStep(false);
+};
 element<HTMLFormElement>("register").onsubmit = (event) => {
   event.preventDefault();
   void run(async () => {
@@ -628,28 +644,38 @@ element<HTMLFormElement>("network-form").onsubmit = (event) => {
 };
 element<HTMLFormElement>("plan-form").onsubmit = (event) => {
   event.preventDefault();
-  void run(async () => {
-    if (!configuringConnection) {
-      connectionStep(true);
-      return;
-    }
-    const inventory = selectedInventory();
-    if (!inventory)
-      throw new Error("Selected VPC is unavailable or ambiguous. Refresh discovery or choose a unique VPC.");
-    const body: ConnectionRequest = {
-      account_id: inventory.account_id,
-      vpc_id: inventory.vpc_id,
-      subnet_ids: Array.from(document.querySelectorAll<HTMLInputElement>('input[name="subnet"]:checked')).map(
-        (s) => s.value,
-      ),
-      network_id: element<HTMLSelectElement>("network").value,
-      allow_application_traffic: false,
-    };
-    const plan = await request<Plan>("/plans", body);
-    selectedPlanId = plan.id;
-    await refresh();
-    navigation.navigate("plans");
-  });
+  const source = snapshot;
+  const version = session.version;
+  void run(
+    async () => {
+      if (!configuringConnection) {
+        connectionStep(true);
+        return;
+      }
+      const inventory = selectedInventory();
+      if (!inventory)
+        throw new Error(
+          "Selected VPC is unavailable or ambiguous. Refresh discovery or choose a unique VPC.",
+        );
+      const body: ConnectionRequest = {
+        account_id: inventory.account_id,
+        vpc_id: inventory.vpc_id,
+        subnet_ids: Array.from(
+          document.querySelectorAll<HTMLInputElement>('input[name="subnet"]:checked'),
+        ).map((s) => s.value),
+        network_id: element<HTMLSelectElement>("network").value,
+        allow_application_traffic: false,
+      };
+      const plan = await request<Plan>("/plans", body);
+      if (version !== session.version || snapshot !== source) return;
+      await refresh();
+      if (version !== session.version) return;
+      selectedPlanId = plan.id;
+      renderPlans(snapshot?.plans ?? []);
+      navigation.navigate("plans");
+    },
+    () => version === session.version && snapshot === source,
+  );
 };
 element("audit").onclick = () =>
   void run(async () => {

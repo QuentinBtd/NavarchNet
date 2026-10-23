@@ -1487,3 +1487,183 @@ it("manual plan submit rechecks uniqueness after refresh and recovers only for a
   expect(document.querySelectorAll("#subnets input")).toHaveLength(0);
   expect(vi.mocked(fetch).mock.calls.length).toBe(recoveredCalls);
 });
+
+function pendingPlanFixture(data: Snapshot): Snapshot["plans"][number] {
+  const inventory = data.inventory[0],
+    network = data.networks[0];
+  return {
+    id: "deferred-client-plan",
+    scope: `${inventory.account_id}:${inventory.vpc_id}`,
+    scope_version: 0,
+    inventory_revision: inventory.revision,
+    network_revision: network.revision,
+    digest: "f".repeat(64),
+    request: {
+      account_id: inventory.account_id,
+      vpc_id: inventory.vpc_id,
+      subnet_ids: inventory.subnets.map((s) => s.id),
+      network_id: network.id,
+      allow_application_traffic: false,
+    },
+    actions: [
+      {
+        kind: "attachment",
+        target: inventory.vpc_id,
+        requires: [],
+        postcondition: "Client fixture attachment prerequisite",
+      },
+    ],
+  };
+}
+it("connection edits retire a pending plan response instead of redirecting to its old scope", async () => {
+  const data = handoffState(),
+    pending = deferred(),
+    plan = pendingPlanFixture(data);
+  window.history.replaceState(null, "", "/#/connections");
+  await boot(async (path) => {
+    if (path === "/api/v1/plans") return pending.promise;
+    throw new Error(`Unexpected client fixture request ${path}`);
+  }, data);
+  handoffChoice("vpc", "vpc-a");
+  required(document.querySelector<HTMLButtonElement>("#configure-connection")).click();
+  await vi.waitFor(() =>
+    expect(required(document.querySelector<HTMLElement>("#connection-configure")).hidden).toBe(false),
+  );
+  required(document.querySelector("#plan-form")).dispatchEvent(new Event("submit", { cancelable: true }));
+  expect(vi.mocked(fetch).mock.calls.at(-1)?.[1]?.method).toBe("POST");
+  const calls = vi.mocked(fetch).mock.calls.length;
+  required(document.querySelector<HTMLButtonElement>("#connection-back")).click();
+  handoffChoice("vpc", "vpc-b");
+  data.plans = [plan];
+  const late = response(plan);
+  pending.resolve(late);
+  await vi.waitFor(() => expect(late.bodyUsed).toBe(true));
+  await new Promise((done) => setTimeout(done, 0));
+  expect(window.location.hash).toBe("#/connections");
+  expect(required(document.querySelector<HTMLSelectElement>("#vpc")).value).toBe("vpc-b");
+  expect(
+    [...document.querySelectorAll<HTMLInputElement>("#subnets input:checked")].map((n) => n.value),
+  ).toEqual(["subnet-b"]);
+  expect(vi.mocked(fetch).mock.calls.length).toBe(calls);
+});
+
+it("network and subnet edits retire pending plan success and errors without stale publication", async () => {
+  for (const field of ["network", "subnet"])
+    for (const failed of [false, true]) {
+      const data = handoffState(),
+        pending = deferred(),
+        plan = pendingPlanFixture(data);
+      window.history.replaceState(null, "", "/#/connections");
+      await boot(async (path) => {
+        if (path === "/api/v1/plans") return pending.promise;
+        throw new Error(`Unexpected client fixture request ${path}`);
+      }, data);
+      required(document.querySelector<HTMLButtonElement>("#configure-connection")).click();
+      await vi.waitFor(() =>
+        expect(required(document.querySelector<HTMLElement>("#connection-configure")).hidden).toBe(false),
+      );
+      required(document.querySelector("#plan-form")).dispatchEvent(new Event("submit", { cancelable: true }));
+      const calls = vi.mocked(fetch).mock.calls.length;
+      if (field === "network") handoffChoice("network", "net-b");
+      else {
+        const input = required(document.querySelector<HTMLInputElement>("#subnets input"));
+        input.checked = false;
+        input.dispatchEvent(new Event("change"));
+      }
+      data.plans = [plan];
+      const late = failed
+        ? new Response(JSON.stringify({ error: "Retired plan failure" }), { status: 409 })
+        : response(plan);
+      pending.resolve(late);
+      await vi.waitFor(() => expect(late.bodyUsed).toBe(true));
+      await new Promise((done) => setTimeout(done, 0));
+      expect(window.location.hash).toBe("#/connections");
+      expect(document.querySelector("#notice")?.textContent).toBe("");
+      expect(vi.mocked(fetch).mock.calls.length).toBe(calls);
+      if (field === "network")
+        expect(required(document.querySelector<HTMLSelectElement>("#network")).value).toBe("net-b");
+      else expect(required(document.querySelector<HTMLInputElement>("#subnets input")).checked).toBe(false);
+    }
+});
+
+it("retired plan refresh does not commit selection and removed inputs cannot retire a newer plan", async () => {
+  const data = handoffState(),
+    old = pendingPlanFixture(data),
+    newer = { ...pendingPlanFixture(data), id: "newer-client-plan", digest: "e".repeat(64) };
+  newer.request = { ...newer.request, network_id: "net-b" };
+  window.history.replaceState(null, "", "/#/connections");
+  await boot(async () => {
+    throw new Error("Unexpected initial request");
+  }, data);
+  const delayedRefresh = deferred(),
+    currentPost = deferred();
+  let posts = 0,
+    snapshots = 0;
+  vi.mocked(fetch).mockImplementation((input) => {
+    const path = String(input);
+    if (path === "/api/v1/plans") return ++posts === 1 ? Promise.resolve(response(old)) : currentPost.promise;
+    if (path === "/api/v1/snapshot")
+      return ++snapshots === 1 ? delayedRefresh.promise : Promise.resolve(response(data));
+    throw new Error(`Unexpected client fixture request ${path}`);
+  });
+  required(document.querySelector<HTMLButtonElement>("#configure-connection")).click();
+  await vi.waitFor(() =>
+    expect(required(document.querySelector<HTMLElement>("#connection-configure")).hidden).toBe(false),
+  );
+  const removed = required(document.querySelector<HTMLInputElement>("#subnets input"));
+  required(document.querySelector("#plan-form")).dispatchEvent(new Event("submit", { cancelable: true }));
+  await vi.waitFor(() => expect(snapshots).toBe(1));
+  handoffChoice("network", "net-b");
+  data.plans = [newer, old];
+  const late = response(data);
+  delayedRefresh.resolve(late);
+  await vi.waitFor(() => expect(late.bodyUsed).toBe(true));
+  await new Promise((done) => setTimeout(done, 0));
+  expect(window.location.hash).toBe("#/connections");
+  required(document.querySelector<HTMLButtonElement>("#refresh")).click();
+  await vi.waitFor(() =>
+    expect(document.querySelector<HTMLElement>("#plan-list article")?.dataset.planId).toBe(newer.id),
+  );
+  expect(removed.isConnected).toBe(false);
+  required(document.querySelector("#plan-form")).dispatchEvent(new Event("submit", { cancelable: true }));
+  expect(posts).toBe(2);
+  removed.checked = false;
+  removed.dispatchEvent(new Event("change"));
+  currentPost.resolve(response(newer));
+  await vi.waitFor(() => expect(window.location.hash).toBe("#/plans"));
+  expect(document.querySelector<HTMLElement>("#plan-list article")?.dataset.planId).toBe(newer.id);
+  handoffChoice("plan-selection", old.id);
+  expect(document.querySelector<HTMLElement>("#plan-list article")?.dataset.planId).toBe(old.id);
+  expect(
+    document.querySelector('[aria-label="Plan impact comparison"]')?.getAttribute("data-plan-digest"),
+  ).toBe(old.digest);
+});
+
+it("snapshot replacement retires pending plan publication even when connection inputs stay equal", async () => {
+  const data = handoffState(),
+    pending = deferred(),
+    plan = pendingPlanFixture(data);
+  window.history.replaceState(null, "", "/#/connections");
+  await boot(async (path) => {
+    if (path === "/api/v1/plans") return pending.promise;
+    throw new Error(`Unexpected client fixture request ${path}`);
+  }, data);
+  required(document.querySelector<HTMLButtonElement>("#configure-connection")).click();
+  await vi.waitFor(() =>
+    expect(required(document.querySelector<HTMLElement>("#connection-configure")).hidden).toBe(false),
+  );
+  required(document.querySelector("#plan-form")).dispatchEvent(new Event("submit", { cancelable: true }));
+  expect(vi.mocked(fetch).mock.calls.at(-1)?.[1]?.method).toBe("POST");
+  required(document.querySelector<HTMLButtonElement>("#refresh")).click();
+  await vi.waitFor(() => expect(document.querySelector("#notice")?.textContent).toContain("Updated."));
+  const calls = vi.mocked(fetch).mock.calls.length,
+    notice = document.querySelector("#notice")?.textContent;
+  data.plans = [plan];
+  const late = response(plan);
+  pending.resolve(late);
+  await vi.waitFor(() => expect(late.bodyUsed).toBe(true));
+  await new Promise((done) => setTimeout(done, 0));
+  expect(window.location.hash).toBe("#/connections");
+  expect(vi.mocked(fetch).mock.calls.length).toBe(calls);
+  expect(document.querySelector("#notice")?.textContent).toBe(notice);
+});
