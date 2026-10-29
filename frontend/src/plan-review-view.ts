@@ -1,4 +1,4 @@
-import type { ActionKind, Plan } from "./generated";
+import type { ActionKind, Operation, Plan } from "./generated";
 import { text } from "./view";
 
 const labels: Record<ActionKind, string> = {
@@ -13,7 +13,29 @@ type ReviewOptions = {
   isCurrent: () => boolean;
   onSelect: (id: string) => void;
   makeApply: (plan: Plan) => HTMLButtonElement;
+  operations?: Operation[];
+  onReviewOperation?: (plan: Plan, operation: Operation) => void;
 };
+
+export function recordedOperationForPlan(
+  plan: Plan,
+  operations: Operation[] | undefined,
+): Operation | undefined {
+  const literal = (value: unknown): value is string => typeof value === "string" && value.length > 0;
+  if (!literal(plan.id) || !literal(plan.scope) || !Array.isArray(operations)) return;
+  for (let i = 0; i < operations.length; i++) {
+    if (!Object.hasOwn(operations, i)) return;
+    const operation = operations[i];
+    if (!operation || ![operation.id, operation.plan_id, operation.scope].every(literal)) return;
+  }
+  const matches = operations.filter((operation) => operation.plan_id === plan.id);
+  const operation = matches.length === 1 ? matches[0] : undefined;
+  return operation &&
+    operation.scope === plan.scope &&
+    operations.filter((record) => record.id === operation.id).length === 1
+    ? operation
+    : undefined;
+}
 
 function renderImpact(plan: Plan): HTMLElement {
   const root = document.createElement("div");
@@ -183,6 +205,29 @@ export function renderPlanReview(plans: Plan[], options: ReviewOptions): HTMLEle
     }
   };
   card.append(renderImpact(plan), technical, options.makeApply(plan), download);
+  if (options.onReviewOperation) {
+    const operation = recordedOperationForPlan(plan, options.operations);
+    const review = text("button", "Review recorded operation");
+    review.type = "button";
+    review.dataset.planOperation = "";
+    review.disabled = !operation;
+    review.onclick = () => {
+      if (
+        !review.disabled &&
+        operation &&
+        root.isConnected &&
+        root.contains(review) &&
+        options.isCurrent() &&
+        recordedOperationForPlan(plan, options.operations) === operation
+      )
+        options.onReviewOperation?.(plan, operation);
+    };
+    card.append(review);
+    if (!operation)
+      card.append(
+        text("p", "Recorded operation unavailable or ambiguous in returned history. Refresh to look for it."),
+      );
+  }
   root.append(card);
   return root;
 }

@@ -25,7 +25,7 @@ import type {
 import { createNavigation } from "./navigation";
 import { renderNetworkWorkspace } from "./network-workspace";
 import { renderOperationReview } from "./operation-review-view";
-import { renderPlanReview } from "./plan-review-view";
+import { recordedOperationForPlan, renderPlanReview } from "./plan-review-view";
 import { Session } from "./session";
 import { renderObservation, text } from "./view";
 import "./style.css";
@@ -204,6 +204,7 @@ function renderNetworkContext() {
   );
 }
 function renderPlans(plans: Plan[]) {
+  const source = snapshot;
   const version = ++planViewVersion;
   const isCurrent = () =>
     version === planViewVersion && app?.isConnected === true && !!snapshot && !element("plans").hidden;
@@ -211,6 +212,21 @@ function renderPlans(plans: Plan[]) {
     renderPlanReview(plans, {
       selectedPlanId,
       isCurrent,
+      operations: source?.operations,
+      onReviewOperation: (plan, operation) => {
+        if (!source || !isCurrent() || snapshot !== source) return;
+        const matches = source.plans.filter((record) => record.id === plan.id);
+        if (
+          matches.length !== 1 ||
+          matches[0] !== plan ||
+          recordedOperationForPlan(plan, source.operations) !== operation
+        )
+          return;
+        session.retireRequests();
+        selectedOperationId = operation.id;
+        renderOperations(source.operations);
+        navigation.navigate("operations");
+      },
       onSelect: (id) => {
         if (!isCurrent()) return;
         session.retireRequests();

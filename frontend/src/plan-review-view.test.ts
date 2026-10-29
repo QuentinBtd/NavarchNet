@@ -250,3 +250,124 @@ it("does not export missing, ambiguous, retired, detached, removed or disabled p
     vi.unstubAllGlobals();
   }
 });
+
+it("reviews only the exact uniquely linked original returned operation as a local read", () => {
+  const older = plan("older"),
+    other = plan("other");
+  const linked = {
+    id: "recorded-older",
+    plan_id: older.id,
+    scope: older.scope,
+    status: "partial",
+    step: 1,
+    attempts: 2,
+    error: "literal <img src=x> failure",
+    fault: "none" as const,
+  };
+  const operations = [{ ...linked, id: "other-operation", plan_id: other.id, scope: other.scope }, linked];
+  const before = structuredClone(operations),
+    onReviewOperation = vi.fn(),
+    onSelect = vi.fn();
+  const node = renderPlanReview([other, older], {
+    selectedPlanId: older.id,
+    operations,
+    isCurrent: () => true,
+    onSelect,
+    onReviewOperation,
+    makeApply: () => {
+      const button = document.createElement("button");
+      button.disabled = true;
+      return button;
+    },
+  });
+  document.body.append(node);
+  const action = node.querySelector<HTMLButtonElement>("[data-plan-operation]");
+  expect(action).not.toBeNull();
+  expect(action?.disabled).toBe(false);
+  action?.click();
+  expect(onReviewOperation).toHaveBeenCalledExactlyOnceWith(older, linked);
+  expect(onReviewOperation.mock.calls[0]?.[0]).toBe(older);
+  expect(onReviewOperation.mock.calls[0]?.[1]).toBe(linked);
+  expect(onSelect).not.toHaveBeenCalled();
+  expect(operations).toEqual(before);
+  expect(node.querySelector("img")).toBeNull();
+});
+
+it("refuses ambiguous or incomplete operation identity context and retired recorded-operation controls", () => {
+  const selected = plan("selected");
+  const linked = {
+    id: "recorded",
+    plan_id: selected.id,
+    scope: selected.scope,
+    status: "queued",
+    step: 0,
+    attempts: 0,
+    error: null,
+    fault: "none" as const,
+  };
+  const onReviewOperation = vi.fn();
+  let current = true;
+  const render = (operations: (typeof linked)[] | undefined) => {
+    const node = renderPlanReview([selected], {
+      operations,
+      isCurrent: () => current,
+      onSelect: () => {},
+      onReviewOperation,
+      makeApply: () => document.createElement("button"),
+    });
+    document.body.append(node);
+    const action = node.querySelector<HTMLButtonElement>("[data-plan-operation]");
+    expect(action).not.toBeNull();
+    return { node, action };
+  };
+  const unrelated = Array.from({ length: 80 }, (_, i) => ({
+    ...linked,
+    id: `other-${i}`,
+    plan_id: `other-${i}`,
+  }));
+  const sparse = [linked, ...unrelated];
+  sparse.length = 82;
+  const malformed = [linked, ...unrelated];
+  malformed[80] = { ...linked, id: undefined as unknown as string };
+  const inherited = [linked, ...unrelated];
+  inherited.length = 82;
+  Object.setPrototypeOf(
+    inherited,
+    Object.assign(Object.create(Array.prototype), {
+      81: { ...linked, id: "inherited", plan_id: "unrelated" },
+    }),
+  );
+  for (const operations of [
+    undefined,
+    [],
+    [linked, { ...linked }],
+    [linked, { ...linked, id: "second-for-same-plan" }],
+    [linked, { ...linked, plan_id: "another-plan" }],
+    [{ ...linked, scope: "wrong-scope" }],
+    [{ ...linked, plan_id: "wrong-plan" }],
+    sparse,
+    inherited,
+    malformed,
+  ]) {
+    const { node, action } = render(operations);
+    expect(action?.disabled).toBe(true);
+    expect(node.textContent).toContain("unavailable or ambiguous in returned history");
+    action?.dispatchEvent(new MouseEvent("click"));
+    expect(onReviewOperation).not.toHaveBeenCalled();
+    node.remove();
+  }
+  const { node, action } = render([linked]);
+  current = false;
+  action?.click();
+  current = true;
+  node.remove();
+  action?.click();
+  document.body.append(node);
+  action?.remove();
+  action?.click();
+  if (!action) throw new Error("Missing recorded-operation control");
+  node.append(action);
+  action.disabled = true;
+  action.dispatchEvent(new MouseEvent("click"));
+  expect(onReviewOperation).not.toHaveBeenCalled();
+});

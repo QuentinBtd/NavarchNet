@@ -302,6 +302,84 @@ test("real browser: register, discover, plan, apply, observe drift and partial f
     expect(await page.evaluate(() => document.documentElement.scrollWidth <= innerWidth)).toBe(true);
     await exactImpact.screenshot({ path: testInfo.outputPath(`operation-plan-handoff-${label}.png`) });
   }
+
+  // Every original journey, scope and operation-to-plan oracle above remains unchanged.
+  // The reciprocal handoff must not reuse a different preselected operation.
+  await page
+    .getByRole("navigation", { name: "Workspace" })
+    .getByRole("link", { name: "Operations", exact: true })
+    .click();
+  await expect(page.locator("#operations")).toBeVisible();
+  await page.getByLabel("Operation to inspect", { exact: true }).selectOption(firstOperation.id);
+  await expect(page.locator("#operation-list article")).toHaveAttribute(
+    "data-operation-id",
+    firstOperation.id,
+  );
+  await page.getByRole("button", { name: "Review original plan", exact: true }).click();
+  await expect(page.locator("#plans")).toBeVisible();
+  await page.getByLabel("Plan to review", { exact: true }).selectOption(secondSaved.id);
+  await expect(page.locator("#plan-list article")).toHaveAttribute("data-plan-id", secondSaved.id);
+  await expect(page.getByRole("button", { name: "Apply reviewed plan", exact: true })).toBeDisabled();
+  const readerHeaders = { authorization: "Bearer browser-test-reader-credential-free-local-only" };
+  const beforeHandoffResponse = await page.request.get("/api/v1/snapshot", { headers: readerHeaders });
+  expect(beforeHandoffResponse.ok()).toBe(true);
+  const beforeHandoff = (await beforeHandoffResponse.json()) as Snapshot;
+  const exactOperations = beforeHandoff.operations.filter((o) => o.plan_id === secondSaved.id);
+  expect(exactOperations).toHaveLength(1);
+  expect(exactOperations[0]?.id).toBe(secondOperation.id);
+  expect(secondOperation.id).not.toBe(firstOperation.id);
+  const handoffCalls = reviewCalls.length;
+  const recordedOperationAction = page.getByRole("button", {
+    name: "Review recorded operation",
+    exact: true,
+  });
+  await expect(recordedOperationAction).toBeVisible();
+  await expect(recordedOperationAction).toBeEnabled();
+  for (const [width, height, label] of [
+    [1440, 1080, "desktop"],
+    [390, 844, "mobile"],
+  ] as const) {
+    await page.setViewportSize({ width, height });
+    expect(await page.evaluate(() => document.documentElement.scrollWidth <= innerWidth)).toBe(true);
+    const previous = await page
+      .getByRole("button", { name: "Download original plan JSON", exact: true })
+      .boundingBox();
+    const recorded = await recordedOperationAction.boundingBox();
+    if (!previous || !recorded) throw new Error("Plan review actions are not visible");
+    expect(
+      recorded.x >= previous.x + previous.width + 4 || recorded.y >= previous.y + previous.height + 4,
+    ).toBe(true);
+    await page
+      .locator("#plans")
+      .screenshot({ path: testInfo.outputPath(`plan-operation-action-${label}.png`) });
+  }
+  await recordedOperationAction.focus();
+  await page.keyboard.press("Enter");
+  await expect(page.locator("#operations")).toBeVisible();
+  await expect(page.getByLabel("Operation to inspect", { exact: true })).toHaveValue(secondOperation.id);
+  await expect(page.locator("#operation-list article")).toHaveAttribute(
+    "data-operation-id",
+    secondOperation.id,
+  );
+  await page.getByText("Technical operation identifiers & persisted state", { exact: true }).click();
+  expect(
+    JSON.parse((await page.locator("#operation-list article details pre").textContent()) ?? "null"),
+  ).toEqual(exactOperations[0]);
+  await page.getByText("Technical operation identifiers & persisted state", { exact: true }).click();
+  for (const [width, height, label] of [
+    [1440, 1080, "desktop"],
+    [390, 844, "mobile"],
+  ] as const) {
+    await page.setViewportSize({ width, height });
+    expect(await page.evaluate(() => document.documentElement.scrollWidth <= innerWidth)).toBe(true);
+    await page
+      .locator("#operations")
+      .screenshot({ path: testInfo.outputPath(`plan-operation-result-${label}.png`) });
+  }
+  expect(reviewCalls).toHaveLength(handoffCalls);
+  expect(await (await page.request.get("/api/v1/snapshot", { headers: readerHeaders })).json()).toEqual(
+    beforeHandoff,
+  );
 });
 
 test("read-only session cannot mutate through UI or API", async ({ page, request }) => {
