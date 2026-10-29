@@ -1,3 +1,6 @@
+/// <reference types="node" />
+
+import { readFile } from "node:fs/promises";
 import { expect, test } from "@playwright/test";
 import type { Account, Inventory, RegionalNetwork, Snapshot } from "../src/generated";
 
@@ -218,4 +221,60 @@ test("real API simulation inventory has a scoped network map and read-only inspe
   });
   expect(subsetPlan.id).not.toBe(body.id);
   await expect(page.locator("#plan-list article")).toHaveAttribute("data-plan-id", subsetPlan.id);
+
+  // All original map/VPC/subnet/immutable-request assertions above remain unchanged.
+  // Read-only review of an older actual plan must export that exact record, not the newest default.
+  await page.getByRole("button", { name: "Sign out" }).click();
+  await page.goto("/#/plans");
+  await page
+    .getByLabel("Demo token or OIDC access token")
+    .fill("browser-test-reader-credential-free-local-only");
+  await page.getByRole("button", { name: "Connect", exact: true }).click();
+  await page.getByLabel("Plan to review", { exact: true }).selectOption(body.id);
+  await expect(page.locator("#plan-list article")).toHaveAttribute("data-plan-id", body.id);
+  await expect(page.getByRole("button", { name: "Apply reviewed plan", exact: true })).toBeDisabled();
+  const beforeExport = await (await request.get("/api/v1/snapshot", { headers })).json();
+  expect(beforeExport.plans).toContainEqual(body);
+  const exportCalls = localCalls.length;
+  const exportPlan = page.getByRole("button", { name: "Download original plan JSON", exact: true });
+  await expect(exportPlan).toBeVisible();
+  await expect(exportPlan).toBeEnabled();
+  const downloadEvent = page.waitForEvent("download");
+  await exportPlan.focus();
+  await page.keyboard.press("Enter");
+  const download = await downloadEvent;
+  expect(download.suggestedFilename()).toBe("navarchnet-plan.json");
+  const downloadedPath = testInfo.outputPath("original-immutable-plan.json");
+  await download.saveAs(downloadedPath);
+  expect(JSON.parse(await readFile(downloadedPath, "utf8"))).toEqual(body);
+  await page.getByLabel("Plan to review", { exact: true }).selectOption(subsetPlan.id);
+  await expect(page.locator("#plan-list article")).toHaveAttribute("data-plan-id", subsetPlan.id);
+  const secondDownloadEvent = page.waitForEvent("download");
+  await exportPlan.focus();
+  await page.keyboard.press("Enter");
+  const secondDownload = await secondDownloadEvent;
+  expect(secondDownload.suggestedFilename()).toBe("navarchnet-plan.json");
+  const secondPath = testInfo.outputPath("original-immutable-subset-plan.json");
+  await secondDownload.saveAs(secondPath);
+  expect(JSON.parse(await readFile(secondPath, "utf8"))).toEqual(subsetPlan);
+  await page.getByLabel("Plan to review", { exact: true }).selectOption(body.id);
+  expect(localCalls).toHaveLength(exportCalls);
+  expect(await (await request.get("/api/v1/snapshot", { headers })).json()).toEqual(beforeExport);
+  await expect(page.locator("#plan-list article")).toHaveAttribute("data-plan-id", body.id);
+  for (const [width, height, label] of [
+    [1440, 1000, "desktop"],
+    [390, 844, "mobile"],
+  ] as const) {
+    await page.setViewportSize({ width, height });
+    expect(await page.evaluate(() => document.documentElement.scrollWidth <= innerWidth)).toBe(true);
+    const applyBox = await page
+      .getByRole("button", { name: "Apply reviewed plan", exact: true })
+      .boundingBox();
+    const downloadBox = await exportPlan.boundingBox();
+    if (!applyBox || !downloadBox) throw new Error("Plan actions are not visible");
+    expect(
+      downloadBox.x >= applyBox.x + applyBox.width + 4 || downloadBox.y >= applyBox.y + applyBox.height + 4,
+    ).toBe(true);
+    await page.screenshot({ path: testInfo.outputPath(`plan-json-export-${label}.png`), fullPage: true });
+  }
 });

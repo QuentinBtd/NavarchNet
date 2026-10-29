@@ -158,12 +158,31 @@ export function renderPlanReview(plans: Plan[], options: ReviewOptions): HTMLEle
     actions.append(item);
   }
   const technical = document.createElement("details");
+  const originalJson = JSON.stringify(plan, null, 2);
   technical.append(
     text("summary", "Technical plan identifiers & original evidence"),
-    text("pre", JSON.stringify(plan, null, 2)),
+    text("pre", originalJson),
   );
   technical.append(text("h4", "Ordered prerequisites & required postconditions"), actions);
-  card.append(renderImpact(plan), technical, options.makeApply(plan));
+  const download = text("button", "Download original plan JSON");
+  download.type = "button";
+  download.dataset.planExport = "";
+  download.onclick = () => {
+    if (download.disabled || !root.isConnected || !root.contains(download) || !options.isCurrent()) return;
+    const url = URL.createObjectURL(new Blob([originalJson], { type: "application/json" }));
+    const link = document.createElement("a");
+    link.href = url;
+    link.download = "navarchnet-plan.json";
+    link.hidden = true;
+    card.append(link);
+    try {
+      link.click();
+    } finally {
+      link.remove();
+      setTimeout(() => URL.revokeObjectURL(url), 0);
+    }
+  };
+  card.append(renderImpact(plan), technical, options.makeApply(plan), download);
   root.append(card);
   return root;
 }

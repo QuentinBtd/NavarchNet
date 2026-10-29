@@ -168,3 +168,85 @@ it("shows only the selected immutable request's account and every ordered litera
   expect(JSON.parse(node.querySelector("details pre")?.textContent ?? "null")).toEqual(older);
   expect(plans).toEqual(before);
 });
+
+it("downloads the exact older selected original plan locally even when execution is disabled", async () => {
+  const older = plan("older-<img src=x>"),
+    plans = [plan("newest"), older],
+    before = structuredClone(plans);
+  const create = vi.fn((_blob: Blob) => "blob:original-plan"),
+    revoke = vi.fn(),
+    fetch = vi.fn();
+  vi.stubGlobal("URL", { createObjectURL: create, revokeObjectURL: revoke });
+  vi.stubGlobal("fetch", fetch);
+  const click = vi.spyOn(HTMLAnchorElement.prototype, "click").mockImplementation(function (
+    this: HTMLAnchorElement,
+  ) {
+    expect(this.download).toBe("navarchnet-plan.json");
+    expect(this.href).toBe("blob:original-plan");
+    expect(this.isConnected).toBe(true);
+  });
+  try {
+    const { node, makeApply, onSelect } = mount(plans, older.id);
+    const apply = [...node.querySelectorAll("button")].find((n) => n.textContent?.startsWith("Apply"));
+    if (!apply) throw new Error("Missing apply control");
+    apply.disabled = true;
+    const download = node.querySelector<HTMLButtonElement>("[data-plan-export]");
+    expect(download).not.toBeNull();
+    expect(download?.disabled).toBe(false);
+    download?.click();
+    expect(create).toHaveBeenCalledTimes(1);
+    expect(click).toHaveBeenCalledTimes(1);
+    const blob = create.mock.calls[0]?.[0];
+    expect(blob?.type).toBe("application/json");
+    if (!blob) throw new Error("Missing original JSON blob");
+    const content = await new Promise<string>((resolve, reject) => {
+      const reader = new FileReader();
+      reader.onload = () => resolve(String(reader.result));
+      reader.onerror = () => reject(reader.error);
+      reader.readAsText(blob);
+    });
+    expect(content).toBe(node.querySelector("details pre")?.textContent);
+    expect(JSON.parse(content)).toEqual(older);
+    await vi.waitFor(() => expect(revoke).toHaveBeenCalledExactlyOnceWith("blob:original-plan"));
+    expect(node.querySelectorAll("a[download]")).toHaveLength(0);
+    expect(node.querySelectorAll("img,script")).toHaveLength(0);
+    expect(fetch).not.toHaveBeenCalled();
+    expect(onSelect).not.toHaveBeenCalled();
+    expect(makeApply).toHaveBeenCalledExactlyOnceWith(older);
+    expect(plans).toEqual(before);
+  } finally {
+    click.mockRestore();
+    vi.unstubAllGlobals();
+  }
+});
+
+it("does not export missing, ambiguous, retired, detached, removed or disabled plan controls", () => {
+  const create = vi.fn(),
+    revoke = vi.fn();
+  vi.stubGlobal("URL", { createObjectURL: create, revokeObjectURL: revoke });
+  try {
+    expect(mount([plan("other")], "missing").node.querySelector("[data-plan-export]")).toBeNull();
+    expect(
+      mount([plan("duplicate"), plan("duplicate")], "duplicate").node.querySelector("[data-plan-export]"),
+    ).toBeNull();
+    let current = false;
+    const { node } = mount([plan("one")], "one", () => current);
+    const download = node.querySelector<HTMLButtonElement>("[data-plan-export]");
+    expect(download).not.toBeNull();
+    download?.dispatchEvent(new MouseEvent("click"));
+    current = true;
+    node.remove();
+    download?.dispatchEvent(new MouseEvent("click"));
+    document.body.append(node);
+    download?.remove();
+    download?.dispatchEvent(new MouseEvent("click"));
+    if (!download) throw new Error("Missing plan download control");
+    node.append(download);
+    download.disabled = true;
+    download.dispatchEvent(new MouseEvent("click"));
+    expect(create).not.toHaveBeenCalled();
+    expect(revoke).not.toHaveBeenCalled();
+  } finally {
+    vi.unstubAllGlobals();
+  }
+});
