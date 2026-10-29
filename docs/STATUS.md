@@ -2,7 +2,11 @@
 
 NavarchNet has an implemented fake-provider journey and a locally exercised AWS read-only account/topology slice, not a completed AWS V1 orchestrator. No live AWS API call/resource mutation, release/tag publication, crates.io upload or GHCR upload has occurred.
 
-## Current continuation — show saved subnet table-selection context in the map
+## Current continuation — security repair and pending UI publication
+
+The independently approved subnet table-context UI commit is preserved locally; its October 23 push failed the mandatory ctutils audit and was not published. After the October 29 human resumption and fresh ordered-lock cold-cache capacity admission, ctutils is locked to 0.4.7. The fresh audit also exposed RUSTSEC-2026-0387 in crypto-bigint 0.5.5. Current jsonwebtoken 11.1.0 has no compatible patched RustCrypto chain; its officially supported AWS-LC feature removes that chain while leaving all authentication code, RS256-only/claims/roles and original OIDC tests unchanged. Generated notices follow the actual locked dependency sources. No audit ignore, policy exception, threshold or hosted workflow is changed. The dependency audit and notice checks pass; fresh cold-cache Rust/PostgreSQL/runtime/browser qualification, independent source review and normal installed hooks remain distinct acceptance gates. Historical runtime copies are preserved separately, not used to impersonate a newly qualified executable. No live AWS, new container/package qualification, merge/release or full-mission claim.
+
+## Implemented checkpoint — saved subnet table-selection context in the map
 
 The saved subnet inspector now shows the existing API-returned table-selection calculation alongside, but separately from, reported metadata. It displays the selected table and literal association source, or the returned unresolved reason, bound to the original capture/time. No new route interpreter, query, form or graph link is added. This is association context, not a destination-route decision, resource ownership, health check, used egress or verified forward/return path.
 
