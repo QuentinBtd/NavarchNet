@@ -1,4 +1,5 @@
-import type { ActionKind, Operation, Plan } from "./generated";
+import type { ActionKind, Operation, Plan, Snapshot } from "./generated";
+import { renderPlanSnapshotRevisions } from "./plan-snapshot-revisions";
 import { text } from "./view";
 
 const labels: Record<ActionKind, string> = {
@@ -15,6 +16,7 @@ type ReviewOptions = {
   makeApply: (plan: Plan) => HTMLButtonElement;
   operations?: Operation[];
   onReviewOperation?: (plan: Plan, operation: Operation) => void;
+  currentSnapshot?: Pick<Snapshot, "plans" | "inventory" | "networks">;
 };
 
 export function recordedOperationForPlan(
@@ -204,7 +206,15 @@ export function renderPlanReview(plans: Plan[], options: ReviewOptions): HTMLEle
       setTimeout(() => URL.revokeObjectURL(url), 0);
     }
   };
-  card.append(renderImpact(plan), technical, options.makeApply(plan), download);
+  card.append(renderImpact(plan));
+  if (options.currentSnapshot)
+    card.append(
+      renderPlanSnapshotRevisions(
+        plan,
+        options.currentSnapshot.plans === plans ? options.currentSnapshot : undefined,
+      ),
+    );
+  card.append(technical, options.makeApply(plan), download);
   if (options.onReviewOperation) {
     const operation = recordedOperationForPlan(plan, options.operations);
     const review = text("button", "Review recorded operation");

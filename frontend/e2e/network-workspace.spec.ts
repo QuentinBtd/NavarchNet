@@ -399,4 +399,51 @@ test("real API simulation inventory has a scoped network map and read-only inspe
   expect(JSON.parse(await originalPlan.locator("pre").innerText())).toEqual(body);
   expect(localCalls).toHaveLength(historyCalls);
   expect(await (await request.get("/api/v1/snapshot", { headers })).json()).toEqual(historyBefore);
+
+  // All previous map/configuration/export/history assertions are preserved above.
+  // Explicit real rediscovery changes current metadata, not the immutable old plan.
+  const rediscovery = await request.post(`/api/v1/accounts/${account.id}/discover`, { headers, data: {} });
+  expect(rediscovery.ok()).toBe(true);
+  const rediscovered = (await rediscovery.json()) as Inventory;
+  expect(rediscovered.account_id).toBe(account.id);
+  expect(rediscovered.vpc_id).toBe(inventory.vpc_id);
+  expect(rediscovered.revision).toBeGreaterThan(body.inventory_revision);
+  const revisionSnapshot = page.waitForResponse((r) => new URL(r.url()).pathname === "/api/v1/snapshot");
+  await page.getByRole("button", { name: "Refresh", exact: true }).click();
+  const revisionResponse = await revisionSnapshot;
+  const returnedRevision = await revisionResponse.json();
+  expect(returnedRevision.inventory).toContainEqual(rediscovered);
+  expect(returnedRevision.plans).toContainEqual(body);
+  await expect(page.locator("#notice")).toHaveText(
+    "Updated. Configuration observations are not connectivity measurements.",
+  );
+  await expect(page.locator("#plan-list article")).toHaveAttribute("data-plan-id", body.id);
+  const revisionCalls = localCalls.length;
+  const revisionContext = page.getByRole("region", { name: "Plan revision comparison", exact: true });
+  await expect(revisionContext).toBeVisible();
+  await expect(revisionContext).toHaveAttribute("data-revision-comparison", "different");
+  await expect(revisionContext).toContainText(
+    `Plan ${body.inventory_revision} · returned snapshot ${rediscovered.revision}`,
+  );
+  await expect(revisionContext).toContainText(
+    `Plan ${body.network_revision} · returned snapshot ${network.revision}`,
+  );
+  await expect(revisionContext).toContainText("server still validates apply");
+  await expect(revisionContext).toContainText("Current scope version is not returned");
+  await expect(page.locator("#plan-list button[data-write]")).toBeDisabled();
+  await originalPlan.locator("summary").click();
+  expect(JSON.parse(await originalPlan.locator("pre").innerText())).toEqual(body);
+  await originalPlan.locator("summary").click();
+  for (const [width, height, label] of [
+    [1440, 1000, "desktop"],
+    [390, 844, "mobile"],
+  ] as const) {
+    await page.setViewportSize({ width, height });
+    expect(await page.evaluate(() => document.documentElement.scrollWidth <= innerWidth)).toBe(true);
+    await page
+      .locator("#plan-list")
+      .screenshot({ path: testInfo.outputPath(`plan-revision-comparison-${label}.png`) });
+  }
+  expect(localCalls).toHaveLength(revisionCalls);
+  expect((await (await request.get("/api/v1/snapshot", { headers })).json()).plans).toContainEqual(body);
 });

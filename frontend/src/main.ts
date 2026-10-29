@@ -227,6 +227,7 @@ function renderPlans(plans: Plan[]) {
     renderPlanReview(plans, {
       selectedPlanId,
       isCurrent,
+      currentSnapshot: source,
       operations: source?.operations,
       onReviewOperation: (plan, operation) => {
         if (!source || !isCurrent() || snapshot !== source) return;
