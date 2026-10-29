@@ -1,5 +1,6 @@
 import type { ActionKind, Inventory, Operation, Plan, RegionalNetwork, Snapshot } from "./generated";
 import { configurationForPlan, workspaceForPlan } from "./network-workspace";
+import { renderPlanActionDetail } from "./plan-action-detail";
 import { renderPlanSnapshotRevisions } from "./plan-snapshot-revisions";
 import { text } from "./view";
 
@@ -330,6 +331,12 @@ export function renderPlanReview(plans: Plan[], options: ReviewOptions): HTMLEle
       ),
     );
   }
+  const actionDetail: HTMLElement = renderPlanActionDetail(
+    plan,
+    actionLabels,
+    () => options.isCurrent() && root.contains(card) && card.contains(actionDetail),
+  );
+  card.append(actionDetail);
   root.append(card);
   return root;
 }

@@ -473,6 +473,77 @@ test("real browser: register, discover, plan, apply, observe drift and partial f
       .locator("#operations")
       .screenshot({ path: testInfo.outputPath(`requested-action-${label}.png`) });
   }
+
+  // All previous requested-action, event and nonmutation assertions remain unchanged.
+  const actionSnapshot = await (
+    await page.request.get("/api/v1/snapshot", { headers: readerHeaders })
+  ).json();
+  expect(actionSnapshot).toEqual(stepSnapshot);
+  await page.getByRole("button", { name: "Review original plan", exact: true }).click();
+  await expect(page.locator("#plans")).toBeVisible();
+  await page.locator("#plan-selection").selectOption(originalPlans[0].id);
+  await expect(page.locator("#plans article")).toHaveAttribute("data-plan-id", originalPlans[0].id);
+  const actionCalls = reviewCalls.length;
+  const actionDetail = page.getByRole("region", { name: "Requested action detail", exact: true });
+  await expect(actionDetail).toBeVisible();
+  const nextAction = actionDetail.getByRole("button", { name: "Next proposed action", exact: true });
+  for (const [index, action] of originalPlans[0].actions.entries()) {
+    await expect(actionDetail).toHaveAttribute("data-plan-id", originalPlans[0].id);
+    await expect(actionDetail).toHaveAttribute("data-plan-digest", originalPlans[0].digest);
+    await expect(actionDetail).toHaveAttribute("data-action-index", String(index));
+    await expect(actionDetail.locator("[data-proposed-kind]")).toHaveAttribute(
+      "data-proposed-kind",
+      action.kind,
+    );
+    expect(await actionDetail.locator("[data-proposed-target]").textContent()).toBe(action.target);
+    expect(await actionDetail.locator("[data-required-postcondition]").textContent()).toBe(
+      action.postcondition,
+    );
+    expect(
+      await actionDetail
+        .locator("[data-required-index]")
+        .evaluateAll((nodes) => nodes.map((node) => node.getAttribute("data-required-index"))),
+    ).toEqual(action.requires.map(String));
+    if (index < originalPlans[0].actions.length - 1) {
+      await nextAction.focus();
+      await nextAction.press("Enter");
+    } else await expect(nextAction).toBeDisabled();
+  }
+  const lastRequired = originalPlans[0].actions.at(-1).requires;
+  if (lastRequired.length) {
+    await actionDetail.locator("[data-required-index]").first().click();
+    await expect(actionDetail).toHaveAttribute("data-action-index", String(lastRequired[0]));
+  }
+  await expect(actionDetail).toContainText("not evidence of execution");
+  await expect(
+    page.locator("#plans").getByRole("button", { name: "Apply reviewed plan", exact: true }),
+  ).toBeDisabled();
+  await expect(page.locator("#plans details").first()).not.toHaveAttribute("open", "");
+  await page
+    .locator("#plans details")
+    .first()
+    .getByText("Technical plan identifiers & original evidence", { exact: true })
+    .click();
+  expect(
+    JSON.parse((await page.locator("#plans details").first().locator("pre").textContent()) ?? "null"),
+  ).toEqual(originalPlans[0]);
+  await page
+    .locator("#plans details")
+    .first()
+    .getByText("Technical plan identifiers & original evidence", { exact: true })
+    .click();
+  expect(reviewCalls.slice(actionCalls)).toEqual([]);
+  expect(await (await page.request.get("/api/v1/snapshot", { headers: readerHeaders })).json()).toEqual(
+    actionSnapshot,
+  );
+  for (const [width, height, label] of [
+    [1440, 1080, "desktop"],
+    [390, 844, "mobile"],
+  ] as const) {
+    await page.setViewportSize({ width, height });
+    expect(await page.evaluate(() => document.documentElement.scrollWidth <= innerWidth)).toBe(true);
+    await actionDetail.screenshot({ path: testInfo.outputPath(`plan-action-detail-${label}.png`) });
+  }
 });
 
 test("read-only session cannot mutate through UI or API", async ({ page, request }) => {
