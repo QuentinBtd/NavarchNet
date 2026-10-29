@@ -2,7 +2,7 @@ import type { ActionKind, Operation, Plan, Snapshot } from "./generated";
 import { renderPlanSnapshotRevisions } from "./plan-snapshot-revisions";
 import { text } from "./view";
 
-const labels: Record<ActionKind, string> = {
+export const actionLabels: Record<ActionKind, string> = {
   attachment: "Create simulated attachment",
   isolation: "Enforce application isolation",
   return_route: "Configure return route",
@@ -114,7 +114,10 @@ function renderImpact(plan: Plan): HTMLElement {
   for (const [kind, values] of groups) {
     const group = document.createElement("div");
     group.dataset.actionKind = kind;
-    group.append(text("dt", `${labels[kind] ?? kind} · ${values.length}`), text("dd", values.join(", ")));
+    group.append(
+      text("dt", `${actionLabels[kind] ?? kind} · ${values.length}`),
+      text("dd", values.join(", ")),
+    );
     targets.append(group);
   }
   proposed.append(text("p", "Affected targets, grouped by action — not step order:"), targets);
@@ -173,7 +176,7 @@ export function renderPlanReview(plans: Plan[], options: ReviewOptions): HTMLEle
   for (const action of plan.actions) {
     const item = document.createElement("li");
     item.append(
-      text("strong", labels[action.kind] ?? action.kind),
+      text("strong", actionLabels[action.kind] ?? action.kind),
       text(
         "p",
         `Requires steps: ${action.requires.map((i) => i + 1).join(", ") || "none"}. Verify: ${action.postcondition}`,

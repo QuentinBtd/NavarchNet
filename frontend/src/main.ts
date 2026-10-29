@@ -25,7 +25,7 @@ import type {
 } from "./generated";
 import { createNavigation } from "./navigation";
 import { plansForWorkspaceScope, renderNetworkWorkspace } from "./network-workspace";
-import { renderOperationReview } from "./operation-review-view";
+import { originalPlanForOperation, renderOperationReview } from "./operation-review-view";
 import { renderOperationStepHistory } from "./operation-step-history";
 import { recordedOperationForPlan, renderPlanReview } from "./plan-review-view";
 import { Session } from "./session";
@@ -291,6 +291,15 @@ function renderOperations(operations: Operation[]) {
   const source = snapshot;
   const version = ++operationViewVersion;
   if (selectedOperationId === undefined) selectedOperationId = operations[0]?.id;
+  const selected = operations.filter((operation) => operation.id === selectedOperationId);
+  const originalOperation = selected.length === 1 ? selected[0] : undefined;
+  const originalPlan =
+    source && originalOperation && originalPlanForOperation(originalOperation, operations, source.plans);
+  const originalIdentity = originalOperation && {
+    id: originalOperation.id,
+    plan_id: originalOperation.plan_id,
+    scope: originalOperation.scope,
+  };
   clearOperationEvidence();
   const isCurrent = () =>
     version === operationViewVersion &&
@@ -332,9 +341,18 @@ function renderOperations(operations: Operation[]) {
       selectedOperationId,
       isCurrent,
       onReviewPlan: (plan) => {
-        if (!source || !isCurrent() || snapshot !== source) return;
-        const matches = source.plans.filter((p) => p.id === plan.id);
-        if (matches.length !== 1 || matches[0] !== plan) return;
+        if (!source || !isCurrent() || snapshot !== source || plan !== originalPlan) return;
+        if (
+          !originalOperation ||
+          !originalIdentity ||
+          source.operations !== operations ||
+          selectedOperationId !== originalIdentity.id ||
+          originalOperation.id !== originalIdentity.id ||
+          originalOperation.plan_id !== originalIdentity.plan_id ||
+          originalOperation.scope !== originalIdentity.scope ||
+          originalPlanForOperation(originalOperation, operations, source.plans) !== plan
+        )
+          return;
         session.retireRequests();
         selectedPlanId = plan.id;
         renderPlans(source.plans);
@@ -357,7 +375,11 @@ function renderOperations(operations: Operation[]) {
           const events = await request(`/operations/${operation.id}/events`);
           if (!current()) return;
           const observed = renderObservation(value);
-          const history = renderOperationStepHistory(events, operation.id, current);
+          const history = renderOperationStepHistory(events, operation.id, current, {
+            operation,
+            operations: source?.operations ?? [],
+            plans: source?.plans ?? [],
+          });
           const originalEvents = JSON.stringify(events, null, 2);
           if (!current()) return;
           element("observation").replaceChildren(observed);

@@ -10,6 +10,40 @@ type Options = {
   onReviewPlan?: (plan: Plan) => void;
 };
 
+export function originalPlanForOperation(
+  operation: Operation,
+  operations: Operation[],
+  plans: Plan[],
+): Plan | undefined {
+  const literal = (value: unknown): value is string => typeof value === "string" && value.length > 0;
+  if (!operation || !Array.isArray(operations) || !Array.isArray(plans)) return;
+  for (const [rows, fields] of [
+    [operations, ["id", "plan_id", "scope"]],
+    [plans, ["id", "scope"]],
+  ] as const) {
+    const ids = new Set<string>();
+    for (let index = 0; index < rows.length; index++) {
+      if (!Object.hasOwn(rows, index)) return;
+      const row = rows[index];
+      if (
+        !row ||
+        typeof row !== "object" ||
+        Array.isArray(row) ||
+        fields.some(
+          (field) =>
+            !Object.hasOwn(row, field) || !literal((row as unknown as Record<string, unknown>)[field]),
+        )
+      )
+        return;
+      if (ids.has(row.id)) return;
+      ids.add(row.id);
+    }
+  }
+  if (operations.find((record) => record.id === operation.id) !== operation) return;
+  const plan = plans.find((record) => record.id === operation.plan_id);
+  return plan?.scope === operation.scope ? plan : undefined;
+}
+
 export function renderOperationReview(operations: Operation[], plans: Plan[], options: Options): HTMLElement {
   const root = document.createElement("div");
   root.append(
@@ -56,8 +90,8 @@ export function renderOperationReview(operations: Operation[], plans: Plan[], op
   }
   const card = document.createElement("article");
   card.dataset.operationId = operation.id;
-  const planMatches = plans.filter((plan) => plan.id === operation.plan_id);
-  const plan = planMatches.length === 1 ? planMatches[0] : undefined;
+  const plan = originalPlanForOperation(operation, operations, plans);
+  const originalIdentity = { id: operation.id, plan_id: operation.plan_id, scope: operation.scope };
   const status =
     operation.status === "succeeded"
       ? "Simulation converged"
@@ -82,7 +116,17 @@ export function renderOperationReview(operations: Operation[], plans: Plan[], op
     review.type = "button";
     review.disabled = !plan;
     review.onclick = () => {
-      if (!review.disabled && plan && root.isConnected && root.contains(review) && options.isCurrent())
+      if (
+        !review.disabled &&
+        plan &&
+        root.isConnected &&
+        root.contains(review) &&
+        options.isCurrent() &&
+        operation.id === originalIdentity.id &&
+        operation.plan_id === originalIdentity.plan_id &&
+        operation.scope === originalIdentity.scope &&
+        originalPlanForOperation(operation, operations, plans) === plan
+      )
         options.onReviewPlan?.(plan);
     };
     card.append(review);

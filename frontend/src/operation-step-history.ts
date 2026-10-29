@@ -1,4 +1,37 @@
+import type { Operation, Plan } from "./generated";
+import { originalPlanForOperation } from "./operation-review-view";
+import { actionLabels } from "./plan-review-view";
 import { text } from "./view";
+
+type OriginalContext = { operation: Operation; operations: Operation[]; plans: Plan[] };
+function capturedActions(context: OriginalContext | undefined, operationId: string) {
+  if (!context?.operation || context.operation.id !== operationId) return;
+  const plan = originalPlanForOperation(context.operation, context.operations, context.plans);
+  if (!plan || !Array.isArray(plan.actions)) return;
+  const actions: { kind: string; label: string; target: string; planId: string }[] = [];
+  for (let index = 0; index < plan.actions.length; index++) {
+    if (!Object.hasOwn(plan.actions, index)) return;
+    const action = plan.actions[index];
+    if (
+      !action ||
+      typeof action !== "object" ||
+      Array.isArray(action) ||
+      typeof action.kind !== "string" ||
+      !Object.hasOwn(action, "kind") ||
+      !Object.hasOwn(action, "target") ||
+      !Object.hasOwn(actionLabels, action.kind) ||
+      typeof action.target !== "string"
+    )
+      return;
+    actions.push({
+      kind: action.kind,
+      label: actionLabels[action.kind],
+      target: action.target,
+      planId: plan.id,
+    });
+  }
+  return actions;
+}
 
 type StepEvent = { step: number; fence: number; outcome: string; at: string };
 const counter = (value: unknown): value is number =>
@@ -32,6 +65,7 @@ export function renderOperationStepHistory(
   raw: unknown,
   operationId: string,
   isCurrent: () => boolean,
+  originalContext?: OriginalContext,
 ): HTMLElement {
   const root = document.createElement("div");
   root.className = "operation-step-history";
@@ -65,6 +99,13 @@ export function renderOperationStepHistory(
     return root;
   }
   const records = events;
+  const actions = capturedActions(originalContext, operationId);
+  root.append(
+    text(
+      "p",
+      "Requested action context is from the original plan, not evidence that this action executed. Reported outcomes remain separate.",
+    ),
+  );
   const count = text("p", "");
   const list = document.createElement("ol");
   const more = text("button", "Show more returned step events");
@@ -79,6 +120,20 @@ export function renderOperationStepHistory(
       row.value = index + 1;
       row.dataset.eventIndex = String(index);
       row.dataset.stepIndex = String(event.step);
+      const action = actions?.[event.step];
+      if (action) {
+        const requested = document.createElement("div");
+        requested.dataset.requestedAction = "";
+        requested.dataset.planId = action.planId;
+        requested.dataset.actionKind = action.kind;
+        requested.append(
+          text("p", "Requested action from original plan"),
+          text("strong", action.label),
+          document.createTextNode(" · "),
+          text("code", action.target.length ? action.target : '"" (empty string)'),
+        );
+        row.append(requested);
+      } else row.append(text("p", "Original requested action unavailable in returned history."));
       row.append(
         text("strong", `Step ${event.step + 1} · Fence ${event.fence}`),
         text(

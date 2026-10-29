@@ -436,6 +436,43 @@ test("real browser: register, discover, plan, apply, observe drift and partial f
       await page.request.get(`/api/v1/operations/${secondOperation.id}/events`, { headers: readerHeaders })
     ).json(),
   ).toEqual(expectedEvents);
+
+  // All previous operation-history and nonmutation assertions remain unchanged.
+  const originalPlans = stepSnapshot.plans.filter(
+    (plan: { id: string }) => plan.id === secondOperation.plan_id,
+  );
+  expect(originalPlans).toHaveLength(1);
+  expect(originalPlans[0]).toEqual(secondSaved);
+  expect(originalPlans[0].scope).toBe(secondOperation.scope);
+  const requestedActions = stepHistory.locator("[data-requested-action]");
+  await expect(requestedActions).toHaveCount(expectedEvents.length);
+  for (const [index, event] of expectedEvents.entries()) {
+    const originalAction = originalPlans[0].actions[event.step];
+    expect(originalAction).toBeDefined();
+    const declared = requestedActions.nth(index);
+    await expect(declared).toHaveAttribute("data-plan-id", secondOperation.plan_id);
+    await expect(declared).toHaveAttribute("data-action-kind", originalAction.kind);
+    await expect(declared).toContainText("Requested action from original plan");
+    await expect(declared).toContainText(originalAction.target);
+  }
+  await expect(stepHistory).toContainText("not evidence that this action executed");
+  expect(reviewCalls.slice(stepCalls).map((url) => new URL(url).pathname)).toEqual([
+    `/api/v1/operations/${secondOperation.id}/observation`,
+    `/api/v1/operations/${secondOperation.id}/events`,
+  ]);
+  expect(await (await page.request.get("/api/v1/snapshot", { headers: readerHeaders })).json()).toEqual(
+    stepSnapshot,
+  );
+  for (const [width, height, label] of [
+    [1440, 1080, "desktop"],
+    [390, 844, "mobile"],
+  ] as const) {
+    await page.setViewportSize({ width, height });
+    expect(await page.evaluate(() => document.documentElement.scrollWidth <= innerWidth)).toBe(true);
+    await page
+      .locator("#operations")
+      .screenshot({ path: testInfo.outputPath(`requested-action-${label}.png`) });
+  }
 });
 
 test("read-only session cannot mutate through UI or API", async ({ page, request }) => {
