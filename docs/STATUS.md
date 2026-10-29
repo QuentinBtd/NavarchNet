@@ -2,7 +2,13 @@
 
 NavarchNet has an implemented fake-provider journey and a locally exercised AWS read-only account/topology slice, not a completed AWS V1 orchestrator. No live AWS API call/resource mutation, release/tag publication, crates.io upload or GHCR upload has occurred.
 
-## Current continuation — original requested action beside persisted outcomes
+## Current continuation — locate a saved plan's requested scope on the map
+
+The immutable-plan review now offers `Locate requested scope on map` as a read-only local handoff. It selects the returned simulation network and composite account/VPC from the exact original request, not a prior/default map selection. Complete own-indexed context, unique identities, original Plan membership, matching literal identifiers, a registered fake account and same-region eligibility are required; unavailable or ambiguous returned context leaves the control disabled with refresh guidance. Renderer and independent parent retain exact original references/request values and revalidate current snapshot/view/control membership before navigating. Locating returned metadata does not establish an applied connection, original subnet membership, plan validity, ownership, used egress or connectivity; it does not enrich or rewrite historical evidence.
+
+A genuine missing-control renderer RED and native RED follow all previous map/revision assertions. GREEN starts with a different actual network/VPC selected, uses keyboard activation as reader, checks exact target selectors and the full current original Inventory disclosure, and proves zero extra page calls and unchanged full snapshot. Final 269 frontend functions/24 files/types/lint/build and five core real-server/PG browser functions pass on identical 884-entry before/after manifests; current desktop/mobile captures are retained. Two supplemental functions are GREEN-only identity/retirement and independent real-main callback qualification, not new native-corruption REDs. Earlier authored import-order, role-locator, wrapping and ordinary-versus-technical identifier assertions remain preserved separately; only new harness lines changed, no product fence or old oracle weakened. Three frontend functions added, zero Rust/Node/native; all 23 old unit files/CSS and the entire previous native baseline are preserved. No new form/query/mutation/backend/model/dependency/permission, cloud/container/final UX/full-mission claim; independent review, normal installed hooks and exact draft-PR readback remain separate gates.
+
+## Delivered checkpoint — original requested action beside persisted outcomes
 
 Final parent acceptance also rejects replacing the original returned Plan with an equal-ID clone after rendering. The additional regression stays in the existing third frontend function; no extra function or native corruption claim is counted.
 

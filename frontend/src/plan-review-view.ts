@@ -1,4 +1,5 @@
-import type { ActionKind, Operation, Plan, Snapshot } from "./generated";
+import type { ActionKind, Inventory, Operation, Plan, RegionalNetwork, Snapshot } from "./generated";
+import { workspaceForPlan } from "./network-workspace";
 import { renderPlanSnapshotRevisions } from "./plan-snapshot-revisions";
 import { text } from "./view";
 
@@ -17,6 +18,8 @@ type ReviewOptions = {
   operations?: Operation[];
   onReviewOperation?: (plan: Plan, operation: Operation) => void;
   currentSnapshot?: Pick<Snapshot, "plans" | "inventory" | "networks">;
+  workspaceSnapshot?: Pick<Snapshot, "accounts" | "inventory" | "networks" | "plans">;
+  onLocateScope?: (plan: Plan, inventory: Inventory, network: RegionalNetwork) => void;
 };
 
 export function recordedOperationForPlan(
@@ -240,6 +243,48 @@ export function renderPlanReview(plans: Plan[], options: ReviewOptions): HTMLEle
       card.append(
         text("p", "Recorded operation unavailable or ambiguous in returned history. Refresh to look for it."),
       );
+  }
+  if (options.onLocateScope) {
+    const source = options.workspaceSnapshot;
+    const scope = source?.plans === plans ? workspaceForPlan(source, plan) : undefined;
+    const original = {
+      id: plan.id,
+      account: plan.request.account_id,
+      vpc: plan.request.vpc_id,
+      network: plan.request.network_id,
+    };
+    const locate = text("button", "Locate requested scope on map");
+    locate.type = "button";
+    locate.dataset.planMap = "";
+    locate.disabled = !scope;
+    locate.onclick = () => {
+      if (
+        locate.disabled ||
+        !scope ||
+        !source ||
+        !root.isConnected ||
+        !root.contains(locate) ||
+        !options.isCurrent() ||
+        source.plans !== plans ||
+        plan.id !== original.id ||
+        plan.request.account_id !== original.account ||
+        plan.request.vpc_id !== original.vpc ||
+        plan.request.network_id !== original.network
+      )
+        return;
+      const current = workspaceForPlan(source, plan);
+      if (current?.inventory === scope.inventory && current.network === scope.network)
+        options.onLocateScope?.(plan, scope.inventory, scope.network);
+    };
+    card.append(
+      locate,
+      text(
+        "p",
+        scope
+          ? "Returned map metadata, not current connection or plan validity."
+          : "Requested map scope unavailable or ambiguous in returned context. Refresh to look for it.",
+      ),
+    );
   }
   root.append(card);
   return root;

@@ -446,4 +446,51 @@ test("real API simulation inventory has a scoped network map and read-only inspe
   }
   expect(localCalls).toHaveLength(revisionCalls);
   expect((await (await request.get("/api/v1/snapshot", { headers })).json()).plans).toContainEqual(body);
+
+  // All previous map and plan-revision assertions remain unchanged.
+  await page
+    .getByRole("navigation", { name: "Workspace" })
+    .getByRole("link", { name: "Regional networks", exact: true })
+    .click();
+  await expect(page.locator("#networks")).toBeVisible();
+  await page.getByLabel("Regional network in workspace", { exact: true }).selectOption(secondNetwork.id);
+  await page
+    .getByLabel("VPC in workspace", { exact: true })
+    .selectOption(JSON.stringify([second.id, secondInventory.vpc_id]));
+  await page.goBack();
+  await expect(page.locator("#plans")).toBeVisible();
+  await expect(page.locator("#plan-list article")).toHaveAttribute("data-plan-id", body.id);
+  const mapBefore = await (await request.get("/api/v1/snapshot", { headers })).json();
+  expect(mapBefore.plans).toContainEqual(body);
+  const mapCalls = localCalls.length;
+  const locateScope = page.getByRole("button", { name: "Locate requested scope on map", exact: true });
+  await expect(locateScope).toBeVisible();
+  await expect(locateScope).toBeEnabled();
+  await locateScope.focus();
+  await page.keyboard.press("Enter");
+  await expect(page.locator("#networks")).toBeVisible();
+  await expect(page.getByLabel("Regional network in workspace", { exact: true })).toHaveValue(
+    body.request.network_id,
+  );
+  await expect(page.getByLabel("VPC in workspace", { exact: true })).toHaveValue(
+    JSON.stringify([body.request.account_id, body.request.vpc_id]),
+  );
+  const mapInspector = page.getByRole("complementary", { name: "Network resource inspector", exact: true });
+  await expect(mapInspector).toContainText("Application VPC");
+  await mapInspector.getByText("Original returned data", { exact: true }).click();
+  await expect(mapInspector.locator("pre")).toBeVisible();
+  expect(JSON.parse(await mapInspector.locator("pre").innerText())).toEqual(rediscovered);
+  await mapInspector.getByText("Original returned data", { exact: true }).click();
+  for (const [width, height, label] of [
+    [1440, 1000, "desktop"],
+    [390, 844, "mobile"],
+  ] as const) {
+    await page.setViewportSize({ width, height });
+    expect(await page.evaluate(() => document.documentElement.scrollWidth <= innerWidth)).toBe(true);
+    await page
+      .locator("#network-list")
+      .screenshot({ path: testInfo.outputPath(`plan-map-handoff-${label}.png`) });
+  }
+  expect(localCalls).toHaveLength(mapCalls);
+  expect(await (await request.get("/api/v1/snapshot", { headers })).json()).toEqual(mapBefore);
 });

@@ -83,6 +83,43 @@ export function plansForWorkspaceScope(
   );
 }
 
+export function workspaceForPlan(
+  data: Context & Pick<Snapshot, "plans">,
+  plan: Plan,
+): { inventory: Inventory; network: RegionalNetwork } | undefined {
+  if (!data || !validContext(data) || !plan?.request) return;
+  for (const [rows, fields] of [
+    [data.accounts, ["id", "provider"]],
+    [data.inventory, ["account_id", "vpc_id", "region"]],
+    [data.networks, ["id", "region"]],
+    [data.plans, ["id", "request"]],
+  ] as const) {
+    if (!Array.isArray(rows)) return;
+    for (let index = 0; index < rows.length; index++) {
+      if (
+        !Object.hasOwn(rows, index) ||
+        !rows[index] ||
+        fields.some((field) => !Object.hasOwn(rows[index], field))
+      )
+        return;
+    }
+  }
+  if (!["account_id", "vpc_id", "network_id"].every((field) => Object.hasOwn(plan.request, field))) return;
+  const inventory = data.inventory.find(
+    (row) => row.account_id === plan.request.account_id && row.vpc_id === plan.request.vpc_id,
+  );
+  const network = data.networks.find((row) => row.id === plan.request.network_id);
+  if (
+    !inventory ||
+    !network ||
+    inventory.region !== network.region ||
+    !data.accounts.some((account) => account.id === inventory.account_id && account.provider === "fake") ||
+    !plansForWorkspaceScope(data, inventory, network)?.includes(plan)
+  )
+    return;
+  return { inventory, network };
+}
+
 // Presentation of the authenticated simulation snapshot only. No route inference, requests or writes.
 export function renderNetworkWorkspace(data: Context, options: Options): HTMLElement {
   const root = document.createElement("div");
