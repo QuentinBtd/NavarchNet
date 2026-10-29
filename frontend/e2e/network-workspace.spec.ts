@@ -277,4 +277,59 @@ test("real API simulation inventory has a scoped network map and read-only inspe
     ).toBe(true);
     await page.screenshot({ path: testInfo.outputPath(`plan-json-export-${label}.png`), fullPage: true });
   }
+
+  // All original map/configuration/plan/export assertions above remain unchanged.
+  // Configure against a different actual network without another form or query.
+  await page.getByRole("button", { name: "Sign out" }).click();
+  await page.goto("/#/connections");
+  await page
+    .getByLabel("Demo token or OIDC access token")
+    .fill("browser-test-admin-credential-free-local-only");
+  await page.getByRole("button", { name: "Connect", exact: true }).click();
+  await page.getByLabel("Discovered VPC", { exact: true }).selectOption(inventory.vpc_id);
+  await page.getByRole("button", { name: "Configure connection", exact: true }).click();
+  const contextBefore = await (await request.get("/api/v1/snapshot", { headers })).json();
+  expect(contextBefore.networks).toContainEqual(secondNetwork);
+  const contextCalls = localCalls.length;
+  await page.getByLabel("Regional egress network", { exact: true }).selectOption(secondNetwork.id);
+  const networkContext = page.getByRole("region", { name: "Selected regional network", exact: true });
+  await expect(networkContext).toBeVisible();
+  await expect(networkContext).toHaveAttribute("data-network-id", secondNetwork.id);
+  await expect(networkContext).toContainText(secondNetwork.name);
+  await expect(networkContext).toContainText(secondNetwork.region);
+  await expect(networkContext).toContainText(secondNetwork.egress_cidr);
+  await expect(networkContext).toContainText(`Snapshot revision ${secondNetwork.revision}`);
+  await expect(networkContext).toContainText("not measured egress");
+  await page.getByLabel("Regional egress network", { exact: true }).selectOption(network.id);
+  await expect(networkContext).toHaveAttribute("data-network-id", network.id);
+  await expect(networkContext).toContainText(network.name);
+  await page.getByLabel("Regional egress network", { exact: true }).selectOption(secondNetwork.id);
+  await expect(networkContext).toHaveAttribute("data-network-id", secondNetwork.id);
+  expect(localCalls).toHaveLength(contextCalls);
+  expect(await (await request.get("/api/v1/snapshot", { headers })).json()).toEqual(contextBefore);
+  for (const [width, height, label] of [
+    [1440, 1000, "desktop"],
+    [390, 844, "mobile"],
+  ] as const) {
+    await page.setViewportSize({ width, height });
+    expect(await page.evaluate(() => document.documentElement.scrollWidth <= innerWidth)).toBe(true);
+    await page
+      .locator("#connect")
+      .screenshot({ path: testInfo.outputPath(`connection-network-context-${label}.png`) });
+  }
+  const contextualSaved = page.waitForResponse(
+    (r) => r.request().method() === "POST" && new URL(r.url()).pathname === "/api/v1/plans",
+  );
+  await page.getByRole("button", { name: "Generate immutable change plan", exact: true }).click();
+  const contextualResponse = await contextualSaved;
+  expect(contextualResponse.ok()).toBe(true);
+  const contextualPlan = await contextualResponse.json();
+  expect(contextualPlan.request).toEqual({
+    account_id: account.id,
+    vpc_id: inventory.vpc_id,
+    subnet_ids: inventory.subnets.map((s) => s.id).sort(),
+    network_id: secondNetwork.id,
+    allow_application_traffic: false,
+  });
+  await expect(page.locator("#plan-list article")).toHaveAttribute("data-plan-id", contextualPlan.id);
 });

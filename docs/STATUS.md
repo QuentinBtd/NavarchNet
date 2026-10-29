@@ -2,7 +2,13 @@
 
 NavarchNet has an implemented fake-provider journey and a locally exercised AWS read-only account/topology slice, not a completed AWS V1 orchestrator. No live AWS API call/resource mutation, release/tag publication, crates.io upload or GHCR upload has occurred.
 
-## Current continuation — review the selected plan's recorded operation
+## Current continuation — selected-network context during configuration
+
+The existing VPC configuration step now shows the selected simulation network's exact returned name, region, declared egress CIDR and snapshot revision immediately below its existing selector. It does not open another form, make a request, infer a used egress address or enrich a historical plan. Selection requires one literal network ID after validating the complete own-indexed ID collection and selected display fields; unavailable/duplicate/malformed context has no selected metadata prefix. Selection changes, same-ID snapshot refresh, Back and logout redraw or clear the context through the existing input-retirement and role flow. This is informational, not a new planning/authorization gate.
+
+A genuine current-server missing-context RED follows every old map, VPC/subnet, immutable-request and JSON-download oracle. GREEN switches between two actual returned networks without page API calls or state changes, captures desktop/mobile configuration, then explicitly generates a plan and compares the complete persisted request with the displayed destination. Fresh 252 frontend functions/types/lint/build and five core real-server/PG browser journeys pass. Four frontend functions cover inert exact values, no mutation/queries, same-ID replacement/role downgrade/Back/logout, invalid identities/display fields/removed events, and GREEN-only sparse/inherited callback-tail qualification. No new Rust/Node/native function, backend/dependency/auth/route/form/query or health/cloud/import/full-mission claim; source review, normal installed hooks and draft-PR readback remain distinct gates.
+
+## Delivered checkpoint — review the selected plan's recorded operation
 
 The immutable-plan review now links locally to its unique original operation in the bounded returned snapshot. `Review recorded operation` preserves the plan/operation IDs and literal scope; it does not apply again, query the server or choose an unrelated default. Missing or ambiguous history stays disabled with refresh guidance, not a claim that no operation exists in storage. Every own-indexed operation identity is validated before selection; multiple matches, duplicate operation IDs across plans, scope mismatch and malformed tails refuse. Renderer and parent revalidate the original references against the current snapshot, view and connected control. Readers retain access without apply permission, and navigation retires pending publication without undoing an admitted POST.
 

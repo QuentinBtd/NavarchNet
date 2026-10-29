@@ -1,5 +1,6 @@
 import { renderShell } from "./app-shell";
 import { renderAwsTopology } from "./aws-view";
+import { renderConnectionNetworkContext } from "./connection-network-context";
 import type {
   Account,
   ApplyPlan,
@@ -567,6 +568,7 @@ async function refresh() {
   );
   renderSubnets();
   renderAwsAccounts();
+  renderSelectedNetworkContext();
   renderPlans(snapshot.plans);
   renderOperations(snapshot.operations);
   for (const node of document.querySelectorAll<HTMLButtonElement>("[data-write]")) node.disabled = !isAdmin();
@@ -640,8 +642,21 @@ vpcChoice.onchange = () => {
   if (retireConnectionInput(vpcChoice)) renderSubnets();
 };
 const networkChoice = element<HTMLSelectElement>("network");
-networkChoice.onchange = () => retireConnectionInput(networkChoice);
+const networkContext = document.createElement("div");
+networkContext.id = "connection-network-context";
+networkContext.setAttribute("aria-live", "polite");
+networkChoice.after(networkContext);
+networkChoice.onchange = () => {
+  if (retireConnectionInput(networkChoice)) renderSelectedNetworkContext();
+};
 let configuringConnection = false;
+function renderSelectedNetworkContext() {
+  networkContext.replaceChildren();
+  if (snapshot && configuringConnection)
+    networkContext.append(
+      renderConnectionNetworkContext(snapshot.networks, element<HTMLSelectElement>("network").value),
+    );
+}
 function connectionStep(configure: boolean) {
   const inventory = configure ? selectedInventory() : undefined;
   if (configure && !inventory)
@@ -655,6 +670,7 @@ function connectionStep(configure: boolean) {
   element("connection-step").textContent = configure
     ? `2. Configure ${inventory?.vpc_id} subnets & egress → 3. Review plan`
     : "1. Select VPC → 2. Configure → 3. Review plan";
+  renderSelectedNetworkContext();
 }
 element("configure-connection").onclick = () => void run(async () => connectionStep(true));
 const connectionBack = element("connection-back");
