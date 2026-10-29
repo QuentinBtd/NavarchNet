@@ -24,7 +24,12 @@ import type {
   VpcLookupResponse,
 } from "./generated";
 import { createNavigation } from "./navigation";
-import { plansForWorkspaceScope, renderNetworkWorkspace, workspaceForPlan } from "./network-workspace";
+import {
+  configurationForPlan,
+  plansForWorkspaceScope,
+  renderNetworkWorkspace,
+  workspaceForPlan,
+} from "./network-workspace";
 import { originalPlanForOperation, renderOperationReview } from "./operation-review-view";
 import { renderOperationStepHistory } from "./operation-step-history";
 import { recordedOperationForPlan, renderPlanReview } from "./plan-review-view";
@@ -231,6 +236,8 @@ function renderPlans(plans: Plan[]) {
   const selected = plans.filter((plan) => plan.id === (selectedPlanId ?? plans[0]?.id));
   const originalPlan = selected.length === 1 ? selected[0] : undefined;
   const originalScope = source && originalPlan && workspaceForPlan(source, originalPlan);
+  const originalConfiguration = source && originalPlan && configurationForPlan(source, originalPlan);
+  const originalRequestJson = originalPlan && JSON.stringify(originalPlan.request);
   const originalRequest = originalPlan && {
     id: originalPlan.id,
     account: originalPlan.request.account_id,
@@ -240,88 +247,140 @@ function renderPlans(plans: Plan[]) {
   const version = ++planViewVersion;
   const isCurrent = () =>
     version === planViewVersion && app?.isConnected === true && !!snapshot && !element("plans").hidden;
-  element("plan-list").replaceChildren(
-    renderPlanReview(plans, {
-      selectedPlanId,
-      isCurrent,
-      currentSnapshot: source,
-      workspaceSnapshot: source,
-      onLocateScope: (plan, inventory, network) => {
-        if (
-          !source ||
-          !isCurrent() ||
-          snapshot !== source ||
-          source.plans !== plans ||
-          plan !== originalPlan ||
-          !originalRequest ||
-          !originalScope ||
-          plan.id !== originalRequest.id ||
-          plan.request.account_id !== originalRequest.account ||
-          plan.request.vpc_id !== originalRequest.vpc ||
-          plan.request.network_id !== originalRequest.network
-        )
-          return;
-        const current = workspaceForPlan(source, plan);
-        if (
-          !current ||
-          current.inventory !== inventory ||
-          current.network !== network ||
-          inventory !== originalScope.inventory ||
-          network !== originalScope.network
-        )
-          return;
-        session.retireRequests();
-        workspaceSelection = {
-          networkId: network.id,
-          inventoryKey: JSON.stringify([inventory.account_id, inventory.vpc_id]),
-        };
-        renderNetworkContext();
-        navigation.navigate("networks");
-      },
-      operations: source?.operations,
-      onReviewOperation: (plan, operation) => {
-        if (!source || !isCurrent() || snapshot !== source) return;
-        const matches = source.plans.filter((record) => record.id === plan.id);
-        if (
-          matches.length !== 1 ||
-          matches[0] !== plan ||
-          recordedOperationForPlan(plan, source.operations) !== operation
-        )
-          return;
-        session.retireRequests();
-        selectedOperationId = operation.id;
-        renderOperations(source.operations);
-        navigation.navigate("operations");
-      },
-      onSelect: (id) => {
-        if (!isCurrent()) return;
-        session.retireRequests();
-        element("notice").replaceChildren();
-        selectedPlanId = id;
-        renderPlans(plans);
-        element("plan-selection").focus();
-      },
-      makeApply: (plan) =>
-        button(
-          "Apply reviewed plan",
-          async () => {
-            const generation = session.version;
-            const source = snapshot;
-            const body: ApplyPlan = { fault: element<HTMLSelectElement>("fault").value as Fault };
-            const operation = await request<Operation>(`/plans/${plan.id}/apply`, body);
-            if (generation !== session.version || snapshot !== source || !isCurrent()) return;
-            await refresh();
-            // The followup retires this draw once; an intervening refresh retires it again.
-            if (generation !== session.version || planViewVersion !== version + 1) return;
-            selectedOperationId = operation.id;
-            renderOperations(snapshot?.operations ?? []);
-            navigation.navigate("operations");
-          },
-          true,
-          isCurrent,
-        ),
-    }),
-  );
+  let prepareRoot: HTMLElement | undefined;
+  let prepareControl: HTMLButtonElement | undefined;
+  prepareRoot = renderPlanReview(plans, {
+    selectedPlanId,
+    isCurrent,
+    currentSnapshot: source,
+    workspaceSnapshot: source,
+    get canReconfigure() {
+      return isAdmin();
+    },
+    onReconfigure: (plan) => {
+      if (
+        !isCurrent() ||
+        !prepareRoot?.isConnected ||
+        !prepareControl?.isConnected ||
+        prepareControl.disabled ||
+        !prepareRoot.contains(prepareControl) ||
+        !element("plan-list").contains(prepareRoot)
+      )
+        return;
+      if (plan.id !== originalRequest?.id) return;
+      if (
+        !isAdmin() ||
+        !source ||
+        !isCurrent() ||
+        snapshot !== source ||
+        source.plans !== plans ||
+        plan !== originalPlan ||
+        !originalConfiguration ||
+        JSON.stringify(plan.request) !== originalRequestJson
+      )
+        return;
+      const current = configurationForPlan(source, plan);
+      if (
+        !current ||
+        current.inventory !== originalConfiguration.inventory ||
+        current.network !== originalConfiguration.network ||
+        current.subnets.length !== originalConfiguration.subnets.length ||
+        current.subnets.some((subnet, index) => subnet !== originalConfiguration.subnets[index])
+      )
+        return;
+      const vpc = element<HTMLSelectElement>("vpc"),
+        network = element<HTMLSelectElement>("network");
+      if (
+        [...vpc.options].filter((option) => option.value === current.inventory.vpc_id).length !== 1 ||
+        [...network.options].filter((option) => option.value === current.network.id).length !== 1
+      )
+        return;
+      session.retireRequests();
+      vpc.value = current.inventory.vpc_id;
+      network.value = current.network.id;
+      renderSubnets();
+      for (const input of element("subnets").querySelectorAll<HTMLInputElement>('input[name="subnet"]'))
+        input.checked = plan.request.subnet_ids.includes(input.value);
+      connectionStep(true);
+      navigation.navigate("connections");
+    },
+    onLocateScope: (plan, inventory, network) => {
+      if (
+        !source ||
+        !isCurrent() ||
+        snapshot !== source ||
+        source.plans !== plans ||
+        plan !== originalPlan ||
+        !originalRequest ||
+        !originalScope ||
+        plan.id !== originalRequest.id ||
+        plan.request.account_id !== originalRequest.account ||
+        plan.request.vpc_id !== originalRequest.vpc ||
+        plan.request.network_id !== originalRequest.network
+      )
+        return;
+      const current = workspaceForPlan(source, plan);
+      if (
+        !current ||
+        current.inventory !== inventory ||
+        current.network !== network ||
+        inventory !== originalScope.inventory ||
+        network !== originalScope.network
+      )
+        return;
+      session.retireRequests();
+      workspaceSelection = {
+        networkId: network.id,
+        inventoryKey: JSON.stringify([inventory.account_id, inventory.vpc_id]),
+      };
+      renderNetworkContext();
+      navigation.navigate("networks");
+    },
+    operations: source?.operations,
+    onReviewOperation: (plan, operation) => {
+      if (!source || !isCurrent() || snapshot !== source) return;
+      const matches = source.plans.filter((record) => record.id === plan.id);
+      if (
+        matches.length !== 1 ||
+        matches[0] !== plan ||
+        recordedOperationForPlan(plan, source.operations) !== operation
+      )
+        return;
+      session.retireRequests();
+      selectedOperationId = operation.id;
+      renderOperations(source.operations);
+      navigation.navigate("operations");
+    },
+    onSelect: (id) => {
+      if (!isCurrent()) return;
+      session.retireRequests();
+      element("notice").replaceChildren();
+      selectedPlanId = id;
+      renderPlans(plans);
+      element("plan-selection").focus();
+    },
+    makeApply: (plan) =>
+      button(
+        "Apply reviewed plan",
+        async () => {
+          const generation = session.version;
+          const source = snapshot;
+          const body: ApplyPlan = { fault: element<HTMLSelectElement>("fault").value as Fault };
+          const operation = await request<Operation>(`/plans/${plan.id}/apply`, body);
+          if (generation !== session.version || snapshot !== source || !isCurrent()) return;
+          await refresh();
+          // The followup retires this draw once; an intervening refresh retires it again.
+          if (generation !== session.version || planViewVersion !== version + 1) return;
+          selectedOperationId = operation.id;
+          renderOperations(snapshot?.operations ?? []);
+          navigation.navigate("operations");
+        },
+        true,
+        isCurrent,
+      ),
+  });
+  prepareControl = prepareRoot.querySelector<HTMLButtonElement>("button[data-plan-reconfigure]") ?? undefined;
+  element("plan-list").replaceChildren(prepareRoot);
 }
 function clearOperationEvidence() {
   element("observation").replaceChildren();

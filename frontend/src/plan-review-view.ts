@@ -1,5 +1,5 @@
 import type { ActionKind, Inventory, Operation, Plan, RegionalNetwork, Snapshot } from "./generated";
-import { workspaceForPlan } from "./network-workspace";
+import { configurationForPlan, workspaceForPlan } from "./network-workspace";
 import { renderPlanSnapshotRevisions } from "./plan-snapshot-revisions";
 import { text } from "./view";
 
@@ -18,6 +18,8 @@ type ReviewOptions = {
   operations?: Operation[];
   onReviewOperation?: (plan: Plan, operation: Operation) => void;
   currentSnapshot?: Pick<Snapshot, "plans" | "inventory" | "networks">;
+  canReconfigure?: boolean;
+  onReconfigure?: (plan: Plan) => void;
   workspaceSnapshot?: Pick<Snapshot, "accounts" | "inventory" | "networks" | "plans">;
   onLocateScope?: (plan: Plan, inventory: Inventory, network: RegionalNetwork) => void;
 };
@@ -283,6 +285,48 @@ export function renderPlanReview(plans: Plan[], options: ReviewOptions): HTMLEle
         scope
           ? "Returned map metadata, not current connection or plan validity."
           : "Requested map scope unavailable or ambiguous in returned context. Refresh to look for it.",
+      ),
+    );
+  }
+  if (options.onReconfigure) {
+    const source = options.workspaceSnapshot;
+    const configuration = source?.plans === plans ? configurationForPlan(source, plan) : undefined;
+    const original = JSON.stringify(plan.request);
+    const originalId = plan.id;
+    const prepare = text("button", "Configure another plan from original request");
+    prepare.dataset.planReconfigure = "";
+    prepare.type = "button";
+    prepare.disabled = !options.canReconfigure || !configuration;
+    prepare.onclick = () => {
+      if (
+        prepare.disabled ||
+        !options.canReconfigure ||
+        !configuration ||
+        !source ||
+        source.plans !== plans ||
+        !root.isConnected ||
+        !root.contains(prepare) ||
+        !options.isCurrent() ||
+        plan.id !== originalId ||
+        JSON.stringify(plan.request) !== original
+      )
+        return;
+      const current = configurationForPlan(source, plan);
+      if (
+        current?.inventory === configuration.inventory &&
+        current.network === configuration.network &&
+        current.subnets.length === configuration.subnets.length &&
+        current.subnets.every((subnet, index) => subnet === configuration.subnets[index])
+      )
+        options.onReconfigure?.(plan);
+    };
+    card.append(
+      prepare,
+      text(
+        "p",
+        configuration
+          ? "Generate a new immutable plan explicitly. This local preparation does not retry or apply the original plan."
+          : "Original request cannot be represented uniquely using returned inventory. Configure manually after review.",
       ),
     );
   }

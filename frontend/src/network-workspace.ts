@@ -120,6 +120,32 @@ export function workspaceForPlan(
   return { inventory, network };
 }
 
+export function configurationForPlan(
+  data: Context & Pick<Snapshot, "plans">,
+  plan: Plan,
+): { inventory: Inventory; network: RegionalNetwork; subnets: Subnet[] } | undefined {
+  const scope = workspaceForPlan(data, plan);
+  if (
+    !scope ||
+    !Object.hasOwn(plan.request, "subnet_ids") ||
+    !Object.hasOwn(plan.request, "allow_application_traffic") ||
+    plan.request.allow_application_traffic !== false ||
+    !collection(plan.request.subnet_ids, literal) ||
+    plan.request.subnet_ids.length === 0 ||
+    new Set(plan.request.subnet_ids).size !== plan.request.subnet_ids.length ||
+    data.inventory.filter((row) => row.vpc_id === scope.inventory.vpc_id).length !== 1 ||
+    new Set(scope.inventory.subnets.map((row) => row.id)).size !== scope.inventory.subnets.length
+  )
+    return;
+  const subnets: Subnet[] = [];
+  for (const id of plan.request.subnet_ids) {
+    const matches = scope.inventory.subnets.filter((row) => row.id === id);
+    if (matches.length !== 1) return;
+    subnets.push(matches[0]);
+  }
+  return { ...scope, subnets };
+}
+
 // Presentation of the authenticated simulation snapshot only. No route inference, requests or writes.
 export function renderNetworkWorkspace(data: Context, options: Options): HTMLElement {
   const root = document.createElement("div");

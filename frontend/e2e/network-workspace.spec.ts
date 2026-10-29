@@ -493,4 +493,68 @@ test("real API simulation inventory has a scoped network map and read-only inspe
   }
   expect(localCalls).toHaveLength(mapCalls);
   expect(await (await request.get("/api/v1/snapshot", { headers })).json()).toEqual(mapBefore);
+
+  // All previous map-location and nonmutation assertions remain unchanged.
+  await page.locator("#logout").click();
+  await page
+    .getByLabel("Demo token or OIDC access token")
+    .fill("browser-test-admin-credential-free-local-only");
+  await page.getByRole("button", { name: "Connect", exact: true }).click();
+  await page
+    .getByRole("navigation", { name: "Workspace" })
+    .getByRole("link", { name: "Connections / plans", exact: true })
+    .click();
+  await expect(page.locator("#connect")).toBeVisible();
+  await page.getByLabel("Discovered VPC", { exact: true }).selectOption(secondInventory.vpc_id);
+  await page.getByRole("button", { name: "Configure connection", exact: true }).click();
+  await page.getByLabel("Regional egress network", { exact: true }).selectOption(secondNetwork.id);
+  await page.getByRole("link", { name: "Review existing change plans", exact: true }).click();
+  await expect(page.locator("#plans")).toBeVisible();
+  await page.locator("#plan-selection").selectOption(subsetPlan.id);
+  await expect(page.locator("#plan-list article")).toHaveAttribute("data-plan-id", subsetPlan.id);
+  const configureBefore = await (await request.get("/api/v1/snapshot", { headers })).json();
+  expect(configureBefore.plans).toContainEqual(subsetPlan);
+  const configureCalls = localCalls.length;
+  const configureOriginal = page.getByRole("button", {
+    name: "Configure another plan from original request",
+    exact: true,
+  });
+  await expect(configureOriginal).toBeVisible();
+  await expect(configureOriginal).toBeEnabled();
+  await configureOriginal.focus();
+  await page.keyboard.press("Enter");
+  await expect(page.locator("#connection-configure")).toBeVisible();
+  await expect(page.getByLabel("Discovered VPC", { exact: true })).toHaveValue(subsetPlan.request.vpc_id);
+  await expect(page.getByLabel("Regional egress network", { exact: true })).toHaveValue(
+    subsetPlan.request.network_id,
+  );
+  expect(
+    await page
+      .locator("#subnets input:checked")
+      .evaluateAll((nodes) => nodes.map((n) => (n as HTMLInputElement).value)),
+  ).toEqual(subsetPlan.request.subnet_ids);
+  expect(localCalls).toHaveLength(configureCalls);
+  expect(await (await request.get("/api/v1/snapshot", { headers })).json()).toEqual(configureBefore);
+  for (const [width, height, label] of [
+    [1440, 1000, "desktop"],
+    [390, 844, "mobile"],
+  ] as const) {
+    await page.setViewportSize({ width, height });
+    expect(await page.evaluate(() => document.documentElement.scrollWidth <= innerWidth)).toBe(true);
+    await page.locator("#connect").screenshot({ path: testInfo.outputPath(`plan-reconfigure-${label}.png`) });
+  }
+  const newPlanResponse = page.waitForResponse(
+    (r) => r.request().method() === "POST" && new URL(r.url()).pathname === "/api/v1/plans",
+  );
+  await page.getByRole("button", { name: "Generate immutable change plan", exact: true }).click();
+  const newPlanResult = await newPlanResponse;
+  expect(newPlanResult.status()).toBe(200);
+  const freshPlan = await newPlanResult.json();
+  expect(freshPlan.id).not.toBe(subsetPlan.id);
+  expect(freshPlan.request).toEqual(subsetPlan.request);
+  expect(freshPlan.inventory_revision).toBe(rediscovered.revision);
+  const afterConfigure = await (await request.get("/api/v1/snapshot", { headers })).json();
+  expect(afterConfigure.plans).toContainEqual(subsetPlan);
+  expect(afterConfigure.plans).toContainEqual(freshPlan);
+  expect(afterConfigure.operations).toEqual(configureBefore.operations);
 });
