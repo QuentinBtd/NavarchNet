@@ -595,6 +595,106 @@ test("real browser: register, discover, plan, apply, observe drift and partial f
     expect(await page.evaluate(() => document.documentElement.scrollWidth <= innerWidth)).toBe(true);
     await page.locator("#plans").screenshot({ path: testInfo.outputPath(`plan-review-link-${label}.png`) });
   }
+
+  // All previous exact-plan-link, authenticated-reload and nonmutation assertions remain unchanged.
+  const operationLinkBefore = await (
+    await page.request.get("/api/v1/snapshot", { headers: readerHeaders })
+  ).json();
+  expect(operationLinkBefore).toEqual(linkBefore);
+  expect(operationLinkBefore.operations.length).toBeGreaterThan(1);
+  const linkedOperation = operationLinkBefore.operations
+    .slice(1)
+    .find((operation: { status: string }) => ["succeeded", "partial", "failed"].includes(operation.status));
+  expect(linkedOperation).toBeDefined();
+  expect(linkedOperation.id).not.toBe(operationLinkBefore.operations[0].id);
+  await page
+    .getByRole("navigation", { name: "Workspace" })
+    .getByRole("link", { name: "Operations", exact: true })
+    .click();
+  await expect(page.locator("#operations")).toBeVisible();
+  await page.locator("#operation-selection").selectOption(linkedOperation.id);
+  await expect(page.locator("#operation-list article")).toHaveAttribute(
+    "data-operation-id",
+    linkedOperation.id,
+  );
+  const operationLinkCalls = reviewCalls.length;
+  const returnedOperationLink = page.getByRole("link", {
+    name: "Link to this returned operation",
+    exact: true,
+  });
+  await expect(returnedOperationLink).toBeVisible();
+  await expect(returnedOperationLink).toHaveAttribute(
+    "href",
+    `#/operations?operation=${encodeURIComponent(linkedOperation.id)}`,
+  );
+  await returnedOperationLink.focus();
+  await page.keyboard.press("Enter");
+  await expect
+    .poll(() => new URL(page.url()).hash)
+    .toBe(`#/operations?operation=${encodeURIComponent(linkedOperation.id)}`);
+  await expect(page.locator("#operation-list article")).toHaveAttribute(
+    "data-operation-id",
+    linkedOperation.id,
+  );
+  expect(reviewCalls.slice(operationLinkCalls)).toEqual([]);
+  const operationReloadCalls = reviewCalls.length;
+  await page.reload();
+  await page
+    .getByLabel("Demo token or OIDC access token")
+    .fill("browser-test-reader-credential-free-local-only");
+  await page.getByRole("button", { name: "Connect", exact: true }).click();
+  await expect(page.locator("#operations")).toBeVisible();
+  await expect(page.locator("#operation-list article")).toHaveAttribute(
+    "data-operation-id",
+    linkedOperation.id,
+  );
+  await expect(page.locator("#operation-selection")).toHaveValue(linkedOperation.id);
+  await expect(page.getByRole("button", { name: "Simulate external drift", exact: true })).toBeDisabled();
+  expect(reviewCalls.slice(operationReloadCalls).map((url) => new URL(url).pathname)).toEqual([
+    "/api/v1/snapshot",
+  ]);
+  await page.getByText("Technical operation identifiers & persisted state", { exact: true }).click();
+  expect(JSON.parse((await page.locator("#operation-list details pre").textContent()) ?? "null")).toEqual(
+    linkedOperation,
+  );
+  await page.getByText("Technical operation identifiers & persisted state", { exact: true }).click();
+  const expectedObservation = await (
+    await page.request.get(`/api/v1/operations/${linkedOperation.id}/observation`, { headers: readerHeaders })
+  ).json();
+  const linkedOperationEvents = await (
+    await page.request.get(`/api/v1/operations/${linkedOperation.id}/events`, { headers: readerHeaders })
+  ).json();
+  const explicitInspectCalls = reviewCalls.length;
+  const [observedResponse, eventsResponse] = await Promise.all([
+    page.waitForResponse(
+      (response) =>
+        new URL(response.url()).pathname === `/api/v1/operations/${linkedOperation.id}/observation`,
+    ),
+    page.waitForResponse(
+      (response) => new URL(response.url()).pathname === `/api/v1/operations/${linkedOperation.id}/events`,
+    ),
+    page.getByRole("button", { name: "Inspect result & step events", exact: true }).click(),
+  ]);
+  expect(await observedResponse.json()).toEqual(expectedObservation);
+  expect(await eventsResponse.json()).toEqual(linkedOperationEvents);
+  await expect(page.locator("#operation-events")).toHaveText(JSON.stringify(linkedOperationEvents, null, 2));
+  expect(reviewCalls.slice(explicitInspectCalls).map((url) => new URL(url).pathname)).toEqual([
+    `/api/v1/operations/${linkedOperation.id}/observation`,
+    `/api/v1/operations/${linkedOperation.id}/events`,
+  ]);
+  expect(await (await page.request.get("/api/v1/snapshot", { headers: readerHeaders })).json()).toEqual(
+    operationLinkBefore,
+  );
+  for (const [width, height, label] of [
+    [1440, 1080, "desktop"],
+    [390, 844, "mobile"],
+  ] as const) {
+    await page.setViewportSize({ width, height });
+    expect(await page.evaluate(() => document.documentElement.scrollWidth <= innerWidth)).toBe(true);
+    await page
+      .locator("#operations")
+      .screenshot({ path: testInfo.outputPath(`operation-review-link-${label}.png`) });
+  }
 });
 
 test("read-only session cannot mutate through UI or API", async ({ page, request }) => {

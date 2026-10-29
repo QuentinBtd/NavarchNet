@@ -30,6 +30,7 @@ import {
   renderNetworkWorkspace,
   workspaceForPlan,
 } from "./network-workspace";
+import { readOperationReviewIntent } from "./operation-review-link";
 import { originalPlanForOperation, renderOperationReview } from "./operation-review-view";
 import { renderOperationStepHistory } from "./operation-step-history";
 import { readPlanReviewIntent } from "./plan-review-link";
@@ -96,6 +97,11 @@ const navigation = createNavigation(app, () => {
   if (snapshot && planIntent.kind !== "none") {
     selectedPlanId = planIntent.kind === "plan" ? planIntent.id : "";
     renderPlans(snapshot.plans);
+  }
+  const operationIntent = readOperationReviewIntent(window.location.hash);
+  if (snapshot && operationIntent.kind !== "none") {
+    selectedOperationId = operationIntent.kind === "operation" ? operationIntent.id : "";
+    renderOperations(snapshot.operations);
   }
 });
 const selectedInventory = () => {
@@ -463,6 +469,8 @@ function renderOperations(operations: Operation[]) {
   clearOperationEvidence();
   const isCurrent = () =>
     version === operationViewVersion &&
+    snapshot === source &&
+    source?.operations === operations &&
     app?.isConnected === true &&
     !!snapshot &&
     !element("operations").hidden;
@@ -524,6 +532,8 @@ function renderOperations(operations: Operation[]) {
         element("notice").replaceChildren();
         selectedOperationId = id;
         renderOperations(operations);
+        if (readOperationReviewIntent(window.location.hash).kind !== "none")
+          navigation.navigate("operations");
         element("operation-selection").focus();
       },
       makeInspect: (operation) =>
@@ -744,6 +754,9 @@ async function refresh() {
   snapshot = await request<Snapshot>("/snapshot");
   const planIntent = readPlanReviewIntent(window.location.hash);
   if (planIntent.kind !== "none") selectedPlanId = planIntent.kind === "plan" ? planIntent.id : "";
+  const operationIntent = readOperationReviewIntent(window.location.hash);
+  if (operationIntent.kind !== "none")
+    selectedOperationId = operationIntent.kind === "operation" ? operationIntent.id : "";
   navigation.authenticate(true);
   element("identity").textContent =
     `${snapshot.mode} authentication · ${snapshot.role} · simulated execution · AWS read-only ${snapshot.aws_read_only_enabled ? "enabled" : "disabled"}`;

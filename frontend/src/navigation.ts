@@ -1,3 +1,4 @@
+import { readOperationReviewIntent } from "./operation-review-link";
 import { readPlanReviewIntent } from "./plan-review-link";
 
 const routes = {
@@ -28,9 +29,21 @@ export function createNavigation(root: HTMLElement, onNavigate: () => void) {
     }
     const raw = window.location.hash.slice(2);
     const intent = readPlanReviewIntent(window.location.hash);
+    const operationIntent = readOperationReviewIntent(window.location.hash);
     const route: WorkspaceRoute =
-      intent.kind !== "none" ? "plans" : Object.hasOwn(routes, raw) ? (raw as WorkspaceRoute) : "overview";
-    const hash = intent.kind !== "none" ? intent.hash : `#/${route}`;
+      intent.kind !== "none"
+        ? "plans"
+        : operationIntent.kind !== "none"
+          ? "operations"
+          : Object.hasOwn(routes, raw)
+            ? (raw as WorkspaceRoute)
+            : "overview";
+    const hash =
+      intent.kind !== "none"
+        ? intent.hash
+        : operationIntent.kind !== "none"
+          ? operationIntent.hash
+          : `#/${route}`;
     if (window.location.hash !== hash)
       window.history.replaceState(null, "", `${window.location.pathname}${window.location.search}${hash}`);
     if (authenticated && currentHash !== undefined && currentHash !== hash) onNavigate();

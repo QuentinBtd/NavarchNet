@@ -1,4 +1,5 @@
 import type { Operation, Plan } from "./generated";
+import { operationReviewHref } from "./operation-review-link";
 import { operationLabel, text } from "./view";
 
 type Options = {
@@ -135,10 +136,11 @@ export function renderOperationReview(operations: Operation[], plans: Plan[], op
         text("p", "Original plan unavailable or ambiguous in returned history. Refresh to look for it."),
       );
   }
+  const originalJson = JSON.stringify(operation, null, 2);
   const technical = document.createElement("details");
   technical.append(
     text("summary", "Technical operation identifiers & persisted state"),
-    text("pre", JSON.stringify(operation, null, 2)),
+    text("pre", originalJson),
   );
   const inspect = options.makeInspect(operation);
   inspect.dataset.operationAction = "";
@@ -147,6 +149,38 @@ export function renderOperationReview(operations: Operation[], plans: Plan[], op
     const drift = options.makeDrift(operation);
     drift.dataset.operationAction = "";
     card.append(drift);
+  }
+  const href = operationReviewHref(originalIdentity.id);
+  if (href) {
+    const link = text("a", "Link to this returned operation");
+    link.dataset.operationReviewLink = "";
+    link.href = href;
+    link.onclick = (event) => {
+      try {
+        if (
+          !root.isConnected ||
+          !root.contains(link) ||
+          !card.contains(link) ||
+          !options.isCurrent() ||
+          link.getAttribute("aria-disabled") === "true" ||
+          link.getAttribute("href") !== href ||
+          operation.id !== originalIdentity.id ||
+          !operations.includes(operation) ||
+          operations.filter((row) => row.id === originalIdentity.id).length !== 1 ||
+          JSON.stringify(operation, null, 2) !== originalJson
+        )
+          event.preventDefault();
+      } catch {
+        event.preventDefault();
+      }
+    };
+    card.append(
+      link,
+      text(
+        "p",
+        "Selects this identity in returned history after authentication; persisted state may change. Not a permanent storage link.",
+      ),
+    );
   }
   root.append(card);
   return root;
