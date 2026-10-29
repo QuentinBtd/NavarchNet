@@ -2,7 +2,17 @@
 
 NavarchNet has an implemented fake-provider journey and a locally exercised AWS read-only account/topology slice, not a completed AWS V1 orchestrator. No live AWS API call/resource mutation, release/tag publication, crates.io upload or GHCR upload has occurred.
 
-## Current continuation — authenticated operation links and explicit result inspection
+## Current continuation — local captured-inspection download
+
+After explicitly inspecting an operation, readers can download its complete captured operation snapshot, observation and step-event response JSON in one local `navarchnet-operation-inspection.json` file. Sources are labeled separately: this is not an atomic historical snapshot, a connectivity measurement or a permanent-storage promise. The export adds no request, retry, repair or execution; it contains the selected record and already-read responses, not the whole snapshot or session token. Existing original Plan associations and full technical evidence remain unchanged.
+
+The capture appears only after both existing scoped reads succeed and remain current. New inspection, selection, Refresh, navigation and logout retire it. Renderer current/connected/direct-control/full captured JSON checks and parent original-mount/reference/unique-identity guards reject retained or changed controls/data. Serialization failure, mismatched identity or a capture over 4 MiB UTF-8 leaves export unavailable without truncation; this is a local artifact limit, not an endpoint/cloud/CPU guarantee. Temporary anchors/object URLs are cleaned up, and opaque IDs never enter the filename.
+
+Final 287 frontend functions/30 files/types/lint/build and five actual core server/PostgreSQL browser functions pass on equal 895 before/after pins. The native suffix follows every old operation-link/inspection/nonmutation assertion and keyboard-downloads two distinguishable real records, comparing full parsed file content, provenance and filename with actual operation/observation/event responses, zero download queries and unchanged same-reader snapshot. Desktop/mobile captures are inspected. First 285 and final tested sources were retained before later tests/two Markdown notes; all 29 old unit files/CSS and complete prior native bytes remain recoverable by removing only the new Node type-reference annotation and suffix/separator. Three frontend functions added, zero Rust/Node/native. An initial URL-mock setup failure and pre-admission lock-wait timeout remain separate from genuine native/Main missing-control REDs and the later typed duplicate-ID export RED. The parent now independently rechecks unique selected identity. Independent review, normal hooks and draft-PR readbacks remain separate pending gates, not final UX or full-mission acceptance.
+
+## Delivered checkpoint — authenticated operation links and explicit result inspection
+
+Commit `fd571200db9d58d73d01641a5a7111dd5764541e` delivered this checkpoint after independent acceptance, normal installed hooks and exact remote/source/runtime/assets/draft-PR readback. Earlier pending wording is its capture-time state, not a current blocker.
 
 Operation review now exposes an internal link containing only its opaque returned operation ID. Authentication and the existing snapshot read restore that unique identity, including after reload; they do not start inspection, retry execution or fetch a record individually. An operation's persisted progress may change: this selects its current returned state, not an immutable historical snapshot or permanent storage link. Missing, invalid or duplicated identities remain unavailable. Same-workspace URL changes/history retire old publication, and manual selection clears explicit intent so Refresh preserves the chosen operation.
 

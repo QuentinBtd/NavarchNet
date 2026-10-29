@@ -1,3 +1,5 @@
+/// <reference types="node" />
+
 import { expect, test } from "@playwright/test";
 import type { Snapshot } from "../src/generated";
 
@@ -694,6 +696,104 @@ test("real browser: register, discover, plan, apply, observe drift and partial f
     await page
       .locator("#operations")
       .screenshot({ path: testInfo.outputPath(`operation-review-link-${label}.png`) });
+  }
+
+  // All previous operation-link, explicit-inspection and snapshot assertions remain unchanged.
+  const capturedExportBefore = await (
+    await page.request.get("/api/v1/snapshot", { headers: readerHeaders })
+  ).json();
+  expect(capturedExportBefore).toEqual(operationLinkBefore);
+  const downloadInspection = page.getByRole("button", {
+    name: "Download captured inspection JSON",
+    exact: true,
+  });
+  await expect(downloadInspection).toBeVisible();
+  const inspectionProvenance = {
+    operation_snapshot: "Authenticated returned snapshot",
+    observation: "Explicit operation-scoped GET",
+    events: "Explicit operation-scoped GET; row identity inherited from request",
+    atomic_capture: false,
+    connectivity: "No measurement inferred by this export",
+  };
+  const capturedExportCalls = reviewCalls.length;
+  const firstInspectionDownload = page.waitForEvent("download");
+  await downloadInspection.focus();
+  await page.keyboard.press("Enter");
+  const firstInspectionFile = await firstInspectionDownload;
+  expect(firstInspectionFile.suggestedFilename()).toBe("navarchnet-operation-inspection.json");
+  const firstInspectionPath = testInfo.outputPath("captured-operation-inspection-first.json");
+  await firstInspectionFile.saveAs(firstInspectionPath);
+  const inspectionFiles = await import("node:fs/promises");
+  expect(JSON.parse(await inspectionFiles.readFile(firstInspectionPath, "utf8"))).toEqual({
+    format: "navarchnet.operation-inspection.v1",
+    operation_snapshot: linkedOperation,
+    observation: expectedObservation,
+    events: linkedOperationEvents,
+    provenance: inspectionProvenance,
+  });
+  expect(reviewCalls.slice(capturedExportCalls)).toEqual([]);
+  const otherInspectionOperation = capturedExportBefore.operations[0];
+  expect(otherInspectionOperation.id).not.toBe(linkedOperation.id);
+  await page.locator("#operation-selection").selectOption(otherInspectionOperation.id);
+  await expect(page.locator("#operation-list article")).toHaveAttribute(
+    "data-operation-id",
+    otherInspectionOperation.id,
+  );
+  await expect(downloadInspection).toHaveCount(0);
+  const otherInspectionObservation = await (
+    await page.request.get(`/api/v1/operations/${otherInspectionOperation.id}/observation`, {
+      headers: readerHeaders,
+    })
+  ).json();
+  const otherInspectionEvents = await (
+    await page.request.get(`/api/v1/operations/${otherInspectionOperation.id}/events`, {
+      headers: readerHeaders,
+    })
+  ).json();
+  const [otherObservationResponse, otherEventsResponse] = await Promise.all([
+    page.waitForResponse(
+      (response) =>
+        new URL(response.url()).pathname === `/api/v1/operations/${otherInspectionOperation.id}/observation`,
+    ),
+    page.waitForResponse(
+      (response) =>
+        new URL(response.url()).pathname === `/api/v1/operations/${otherInspectionOperation.id}/events`,
+    ),
+    page.getByRole("button", { name: "Inspect result & step events", exact: true }).click(),
+  ]);
+  expect(await otherObservationResponse.json()).toEqual(otherInspectionObservation);
+  expect(await otherEventsResponse.json()).toEqual(otherInspectionEvents);
+  await expect(page.locator("#operation-events")).toHaveText(JSON.stringify(otherInspectionEvents, null, 2));
+  await expect(downloadInspection).toBeVisible();
+  const secondExportCalls = reviewCalls.length;
+  const secondInspectionDownload = page.waitForEvent("download");
+  await downloadInspection.focus();
+  await page.keyboard.press("Enter");
+  const secondInspectionFile = await secondInspectionDownload;
+  expect(secondInspectionFile.suggestedFilename()).toBe("navarchnet-operation-inspection.json");
+  const secondInspectionPath = testInfo.outputPath("captured-operation-inspection-second.json");
+  await secondInspectionFile.saveAs(secondInspectionPath);
+  expect(JSON.parse(await inspectionFiles.readFile(secondInspectionPath, "utf8"))).toEqual({
+    format: "navarchnet.operation-inspection.v1",
+    operation_snapshot: otherInspectionOperation,
+    observation: otherInspectionObservation,
+    events: otherInspectionEvents,
+    provenance: inspectionProvenance,
+  });
+  expect(reviewCalls.slice(secondExportCalls)).toEqual([]);
+  expect(await (await page.request.get("/api/v1/snapshot", { headers: readerHeaders })).json()).toEqual(
+    capturedExportBefore,
+  );
+  await expect(page.getByRole("button", { name: "Simulate external drift", exact: true })).toBeDisabled();
+  for (const [width, height, label] of [
+    [1440, 1080, "desktop"],
+    [390, 844, "mobile"],
+  ] as const) {
+    await page.setViewportSize({ width, height });
+    expect(await page.evaluate(() => document.documentElement.scrollWidth <= innerWidth)).toBe(true);
+    await page
+      .locator("#operations")
+      .screenshot({ path: testInfo.outputPath(`operation-inspection-export-${label}.png`) });
   }
 });
 

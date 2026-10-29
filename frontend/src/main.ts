@@ -30,6 +30,7 @@ import {
   renderNetworkWorkspace,
   workspaceForPlan,
 } from "./network-workspace";
+import { renderOperationInspectionExport } from "./operation-inspection-export";
 import { readOperationReviewIntent } from "./operation-review-link";
 import { originalPlanForOperation, renderOperationReview } from "./operation-review-view";
 import { renderOperationStepHistory } from "./operation-step-history";
@@ -87,6 +88,7 @@ const navigation = createNavigation(app, () => {
     "aws-topology",
     "observation",
     "operation-step-history",
+    "operation-export",
     "operation-events",
     "diagnostic-output",
     "notice",
@@ -448,6 +450,7 @@ function renderPlans(plans: Plan[]) {
   element("plan-list").replaceChildren(prepareRoot);
 }
 function clearOperationEvidence() {
+  element("operation-export").replaceChildren();
   element("observation").replaceChildren();
   element("operation-step-history").replaceChildren();
   element("operation-events").replaceChildren();
@@ -551,10 +554,22 @@ function renderOperations(operations: Operation[]) {
             plans: source?.plans ?? [],
           });
           const originalEvents = JSON.stringify(events, null, 2);
+          const mount = element("operation-export");
+          const exported = renderOperationInspectionExport(
+            operation,
+            value,
+            events,
+            () =>
+              current() &&
+              mount.firstElementChild === exported &&
+              operations.includes(operation) &&
+              operations.filter((row) => row.id === operation.id).length === 1,
+          );
           if (!current()) return;
           element("observation").replaceChildren(observed);
           element("operation-step-history").replaceChildren(history);
           element("operation-events").textContent = originalEvents;
+          mount.replaceChildren(exported);
         }),
       makeDrift:
         snapshot?.mode === "demo"
