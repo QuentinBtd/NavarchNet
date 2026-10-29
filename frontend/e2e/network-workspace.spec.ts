@@ -557,4 +557,65 @@ test("real API simulation inventory has a scoped network map and read-only inspe
   expect(afterConfigure.plans).toContainEqual(subsetPlan);
   expect(afterConfigure.plans).toContainEqual(freshPlan);
   expect(afterConfigure.operations).toEqual(configureBefore.operations);
+
+  // All previous original-request preparation and immutable-generation assertions remain unchanged.
+  const requestedReaderHeaders = { Authorization: "Bearer browser-test-reader-credential-free-local-only" };
+  await page.locator("#logout").click();
+  await page
+    .getByLabel("Demo token or OIDC access token")
+    .fill("browser-test-reader-credential-free-local-only");
+  await page.getByRole("button", { name: "Connect", exact: true }).click();
+  await page
+    .getByRole("navigation", { name: "Workspace" })
+    .getByRole("link", { name: "Connections / plans", exact: true })
+    .click();
+  await expect(page.locator("#connect")).toBeVisible();
+  await page.getByRole("link", { name: "Review existing change plans", exact: true }).click();
+  await expect(page.locator("#plans")).toBeVisible();
+  await page.locator("#plan-selection").selectOption(subsetPlan.id);
+  await expect(page.locator("#plan-list article")).toHaveAttribute("data-plan-id", subsetPlan.id);
+  const subsetBefore = await (
+    await request.get("/api/v1/snapshot", { headers: requestedReaderHeaders })
+  ).json();
+  expect(subsetBefore.plans).toContainEqual(subsetPlan);
+  expect(subsetBefore.role).toBe("read_only");
+  expect(subsetBefore).toEqual({ ...afterConfigure, role: "read_only" });
+  const subsetCalls = localCalls.length;
+  await page.getByRole("button", { name: "Locate requested scope on map", exact: true }).focus();
+  await page.keyboard.press("Enter");
+  await expect(page.locator("#networks")).toBeVisible();
+  await expect(page.getByLabel("Regional network in workspace", { exact: true })).toHaveValue(
+    subsetPlan.request.network_id,
+  );
+  await expect(page.getByLabel("VPC in workspace", { exact: true })).toHaveValue(
+    JSON.stringify([subsetPlan.request.account_id, subsetPlan.request.vpc_id]),
+  );
+  const requestedSubset = page.getByRole("region", { name: "Original plan requested subnets", exact: true });
+  await expect(requestedSubset).toBeVisible();
+  await expect(requestedSubset).toHaveAttribute("data-plan-id", subsetPlan.id);
+  await expect(requestedSubset).toHaveAttribute("data-plan-digest", subsetPlan.digest);
+  expect(await requestedSubset.locator("[data-requested-subnet]").allTextContents()).toEqual(
+    subsetPlan.request.subnet_ids,
+  );
+  expect(
+    await page
+      .locator("#network-list [data-plan-requested-subnet]")
+      .evaluateAll((nodes) => nodes.map((node) => node.getAttribute("data-plan-requested-subnet"))),
+  ).toEqual(subsetPlan.request.subnet_ids);
+  await expect(requestedSubset).toContainText("not historical membership or an applied connection");
+  await expect(page.getByRole("button", { name: "Configure selected VPC", exact: true })).toBeDisabled();
+  expect(localCalls).toHaveLength(subsetCalls);
+  expect(await (await request.get("/api/v1/snapshot", { headers: requestedReaderHeaders })).json()).toEqual(
+    subsetBefore,
+  );
+  for (const [width, height, label] of [
+    [1440, 1000, "desktop"],
+    [390, 844, "mobile"],
+  ] as const) {
+    await page.setViewportSize({ width, height });
+    expect(await page.evaluate(() => document.documentElement.scrollWidth <= innerWidth)).toBe(true);
+    await page
+      .locator("#network-list")
+      .screenshot({ path: testInfo.outputPath(`plan-map-requested-subnets-${label}.png`) });
+  }
 });

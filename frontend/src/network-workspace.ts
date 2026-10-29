@@ -1,4 +1,5 @@
 import type { Inventory, Plan, RegionalNetwork, Snapshot, Subnet } from "./generated";
+import { captureRequestedPlan, renderRequestedSubnets } from "./plan-requested-subnets";
 import { text } from "./view";
 
 type Selection = { networkId?: string; inventoryKey?: string };
@@ -10,6 +11,7 @@ type Options = {
   canConfigure?: boolean;
   onConfigure?: (inventory: Inventory, network: RegionalNetwork, subnet?: Subnet) => void;
   plans?: Plan[];
+  requestedPlan?: Plan | null;
   onReviewPlan?: (plan: Plan, inventory: Inventory, network: RegionalNetwork) => void;
 };
 type Resource = { kind: "network" } | { kind: "vpc" } | { kind: "subnet"; index: number };
@@ -162,6 +164,8 @@ export function renderNetworkWorkspace(data: Context, options: Options): HTMLEle
   let resource: Resource = { kind: "vpc" };
   let subnetLimit = 6;
   let version = 0;
+  const originalRequestedPlans = options.plans;
+  const originalRequestedPlan = captureRequestedPlan(options.requestedPlan);
   const isCurrent = () => root.isConnected && options.isCurrent();
   function draw(focus?: string) {
     const epoch = ++version;
@@ -177,6 +181,19 @@ export function renderNetworkWorkspace(data: Context, options: Options): HTMLEle
     options.onSelection({ ...selected });
     if (!inventory) resource = { kind: "network" };
     const account = data.accounts.find((a) => a.id === inventory?.account_id);
+    const requestedPlan = options.plans === originalRequestedPlans ? options.requestedPlan : null;
+    const requestedContext =
+      requestedPlan === undefined
+        ? undefined
+        : renderRequestedSubnets(
+            requestedPlan,
+            originalRequestedPlan,
+            requestedPlan && options.plans
+              ? workspaceForPlan({ ...data, plans: options.plans }, requestedPlan)
+              : undefined,
+            inventory,
+            network,
+          );
     const active = (node: HTMLElement) => isCurrent() && version === epoch && root.contains(node);
     const controls = document.createElement("div");
     controls.className = "network-map-controls";
@@ -275,13 +292,17 @@ export function renderNetworkWorkspace(data: Context, options: Options): HTMLEle
       application.append(text("p", `${inventory.subnets.length} returned subnets · no traffic AZ inferred`));
       const subnets = document.createElement("div");
       subnets.className = "network-map-subnets";
-      for (const [index, subnet] of inventory.subnets.slice(0, subnetLimit).entries())
-        subnets.append(
-          node(`Inspect subnet ${subnet.id}`, subnet.az_id, "Subnet · reported AZ ID", {
-            kind: "subnet",
-            index,
-          }),
-        );
+      for (const [index, subnet] of inventory.subnets.slice(0, subnetLimit).entries()) {
+        const subnetNode = node(`Inspect subnet ${subnet.id}`, subnet.az_id, "Subnet · reported AZ ID", {
+          kind: "subnet",
+          index,
+        });
+        if (requestedContext?.matched.has(subnet)) {
+          subnetNode.dataset.planRequestedSubnet = subnet.id;
+          subnetNode.append(text("span", "Requested by original plan"));
+        }
+        subnets.append(subnetNode);
+      }
       application.append(subnets);
       if (inventory.subnets.length > subnetLimit) {
         const more = text(
@@ -360,6 +381,7 @@ export function renderNetworkWorkspace(data: Context, options: Options): HTMLEle
       field("Network owner account", "Not reported by this model");
     }
     aside.append(text("h3", title), text("p", "Simulation · authenticated API snapshot"), fields);
+    if (requestedContext) aside.append(requestedContext.element);
     aside.append(
       text(
         "p",

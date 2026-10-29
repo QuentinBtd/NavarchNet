@@ -56,6 +56,18 @@ let selectedOperationId: string | undefined;
 let operationViewVersion = 0;
 let networkWorkspaceVersion = 0;
 let workspaceSelection: { networkId?: string; inventoryKey?: string } = {};
+let workspaceRequestedPlan:
+  | {
+      plan: Plan;
+      source: Snapshot;
+      plans: Plan[];
+      id: string;
+      digest: string | undefined;
+      request: Plan["request"] | undefined;
+      subnetIds: string[] | undefined;
+      requestJson: string | undefined;
+    }
+  | undefined;
 const navigation = createNavigation(app, () => {
   session.retireRequests();
   ++awsViewVersion;
@@ -177,12 +189,39 @@ function renderNetworkContext() {
       selection: workspaceSelection,
       isCurrent,
       onSelection: (selection) => {
+        if (snapshot !== source || version !== networkWorkspaceVersion) return;
+        if (
+          selection.networkId !== workspaceSelection.networkId ||
+          selection.inventoryKey !== workspaceSelection.inventoryKey
+        )
+          workspaceRequestedPlan = undefined;
         workspaceSelection = selection;
       },
       get canConfigure() {
         return isAdmin();
       },
       plans: source.plans,
+      get requestedPlan() {
+        const focus = workspaceRequestedPlan;
+        if (!focus) return undefined;
+        if (snapshot !== source || version !== networkWorkspaceVersion) return null;
+        try {
+          return focus.source === source &&
+            focus.plans === source.plans &&
+            Array.isArray(source.plans) &&
+            source.plans.includes(focus.plan) &&
+            source.plans.filter((plan) => plan.id === focus.id).length === 1 &&
+            focus.plan.id === focus.id &&
+            focus.plan.digest === focus.digest &&
+            focus.plan.request === focus.request &&
+            focus.plan.request.subnet_ids === focus.subnetIds &&
+            JSON.stringify(focus.plan.request) === focus.requestJson
+            ? focus.plan
+            : null;
+        } catch {
+          return null;
+        }
+      },
       onReviewPlan: (plan, inventory, network) => {
         if (
           !isCurrent() ||
@@ -238,6 +277,9 @@ function renderPlans(plans: Plan[]) {
   const originalScope = source && originalPlan && workspaceForPlan(source, originalPlan);
   const originalConfiguration = source && originalPlan && configurationForPlan(source, originalPlan);
   const originalRequestJson = originalPlan && JSON.stringify(originalPlan.request);
+  const originalPlanRequest = originalPlan?.request;
+  const originalPlanSubnetIds = originalPlan?.request.subnet_ids;
+  const originalPlanDigest = originalPlan?.digest;
   const originalRequest = originalPlan && {
     id: originalPlan.id,
     account: originalPlan.request.account_id,
@@ -332,6 +374,16 @@ function renderPlans(plans: Plan[]) {
       workspaceSelection = {
         networkId: network.id,
         inventoryKey: JSON.stringify([inventory.account_id, inventory.vpc_id]),
+      };
+      workspaceRequestedPlan = {
+        plan,
+        source,
+        plans,
+        id: originalRequest.id,
+        digest: originalPlanDigest,
+        request: originalPlanRequest,
+        subnetIds: originalPlanSubnetIds,
+        requestJson: originalRequestJson,
       };
       renderNetworkContext();
       navigation.navigate("networks");
@@ -737,6 +789,7 @@ element<HTMLFormElement>("login").onsubmit = (event) => {
 function clearSession() {
   ++networkWorkspaceVersion;
   workspaceSelection = {};
+  workspaceRequestedPlan = undefined;
   selectedOperationId = undefined;
   ++operationViewVersion;
   clearOperationEvidence();
