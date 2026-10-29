@@ -26,6 +26,7 @@ import type {
 import { createNavigation } from "./navigation";
 import { plansForWorkspaceScope, renderNetworkWorkspace } from "./network-workspace";
 import { renderOperationReview } from "./operation-review-view";
+import { renderOperationStepHistory } from "./operation-step-history";
 import { recordedOperationForPlan, renderPlanReview } from "./plan-review-view";
 import { Session } from "./session";
 import { renderObservation, text } from "./view";
@@ -63,7 +64,14 @@ const navigation = createNavigation(app, () => {
       (node.hasAttribute("data-aws-write") && !snapshot?.aws_read_only_enabled);
     delete node.dataset.pending;
   }
-  for (const id of ["aws-topology", "observation", "operation-events", "diagnostic-output", "notice"])
+  for (const id of [
+    "aws-topology",
+    "observation",
+    "operation-step-history",
+    "operation-events",
+    "diagnostic-output",
+    "notice",
+  ])
     element(id).replaceChildren();
   element("operation-events-details").removeAttribute("open");
 });
@@ -275,6 +283,7 @@ function renderPlans(plans: Plan[]) {
 }
 function clearOperationEvidence() {
   element("observation").replaceChildren();
+  element("operation-step-history").replaceChildren();
   element("operation-events").replaceChildren();
   element("operation-events-details").removeAttribute("open");
 }
@@ -347,8 +356,13 @@ function renderOperations(operations: Operation[]) {
             throw new Error("Observation did not match selected operation");
           const events = await request(`/operations/${operation.id}/events`);
           if (!current()) return;
-          element("observation").replaceChildren(renderObservation(value));
-          element("operation-events").textContent = JSON.stringify(events, null, 2);
+          const observed = renderObservation(value);
+          const history = renderOperationStepHistory(events, operation.id, current);
+          const originalEvents = JSON.stringify(events, null, 2);
+          if (!current()) return;
+          element("observation").replaceChildren(observed);
+          element("operation-step-history").replaceChildren(history);
+          element("operation-events").textContent = originalEvents;
         }),
       makeDrift:
         snapshot?.mode === "demo"
@@ -621,6 +635,7 @@ function clearSession() {
     "plan-list",
     "operation-list",
     "observation",
+    "operation-step-history",
     "operation-events",
     "summary",
     "vpc",

@@ -541,3 +541,13 @@ summary {
     padding: 1rem;
   }
 }
+
+.operation-step-history {
+  overflow-wrap: anywhere;
+}
+.operation-step-history li {
+  margin-block: 0.6rem;
+}
+.operation-step-history li > p {
+  margin: 0.15rem 0;
+}

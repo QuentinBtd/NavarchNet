@@ -380,6 +380,62 @@ test("real browser: register, discover, plan, apply, observe drift and partial f
   expect(await (await page.request.get("/api/v1/snapshot", { headers: readerHeaders })).json()).toEqual(
     beforeHandoff,
   );
+
+  // All previous journey, scope and reciprocal-handoff assertions remain unchanged.
+  // The existing Inspect response should be readable without opening technical JSON.
+  const stepSnapshot = await (await page.request.get("/api/v1/snapshot", { headers: readerHeaders })).json();
+  const stepResponse = await page.request.get(`/api/v1/operations/${secondOperation.id}/events`, {
+    headers: readerHeaders,
+  });
+  expect(stepResponse.ok()).toBe(true);
+  const expectedEvents = (await stepResponse.json()) as {
+    step: number;
+    fence: number;
+    outcome: string;
+    at: string;
+  }[];
+  expect(expectedEvents.length).toBeGreaterThan(0);
+  expect(expectedEvents.some((event) => event.outcome === "postcondition_verified_in_simulator")).toBe(true);
+  expect(expectedEvents.some((event) => event.outcome !== "postcondition_verified_in_simulator")).toBe(true);
+  const stepCalls = reviewCalls.length;
+  await page.getByRole("button", { name: "Inspect result & step events", exact: true }).click();
+  await expect(page.locator("#operation-events")).toHaveText(JSON.stringify(expectedEvents, null, 2));
+  const stepHistory = page.getByRole("region", { name: "Recorded step history", exact: true });
+  await expect(stepHistory).toBeVisible();
+  await expect(stepHistory).toHaveAttribute("data-operation-id", secondOperation.id);
+  await expect(stepHistory.locator("li")).toHaveCount(expectedEvents.length);
+  for (const [index, event] of expectedEvents.entries()) {
+    const row = stepHistory.locator("li").nth(index);
+    await expect(row).toHaveAttribute("data-event-index", String(index));
+    await expect(row).toHaveAttribute("data-step-index", String(event.step));
+    await expect(row).toContainText(`Step ${event.step + 1}`);
+    await expect(row).toContainText(`Fence ${event.fence}`);
+    await expect(row).toContainText(event.outcome);
+    await expect(row).toContainText(event.at);
+  }
+  await expect(stepHistory).toContainText("not connectivity measurements");
+  for (const [width, height, label] of [
+    [1440, 1080, "desktop"],
+    [390, 844, "mobile"],
+  ] as const) {
+    await page.setViewportSize({ width, height });
+    expect(await page.evaluate(() => document.documentElement.scrollWidth <= innerWidth)).toBe(true);
+    await page
+      .locator("#operations")
+      .screenshot({ path: testInfo.outputPath(`operation-step-history-${label}.png`) });
+  }
+  expect(reviewCalls.slice(stepCalls).map((url) => new URL(url).pathname)).toEqual([
+    `/api/v1/operations/${secondOperation.id}/observation`,
+    `/api/v1/operations/${secondOperation.id}/events`,
+  ]);
+  expect(await (await page.request.get("/api/v1/snapshot", { headers: readerHeaders })).json()).toEqual(
+    stepSnapshot,
+  );
+  expect(
+    await (
+      await page.request.get(`/api/v1/operations/${secondOperation.id}/events`, { headers: readerHeaders })
+    ).json(),
+  ).toEqual(expectedEvents);
 });
 
 test("read-only session cannot mutate through UI or API", async ({ page, request }) => {
