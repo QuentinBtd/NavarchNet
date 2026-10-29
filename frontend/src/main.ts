@@ -32,6 +32,7 @@ import {
 } from "./network-workspace";
 import { originalPlanForOperation, renderOperationReview } from "./operation-review-view";
 import { renderOperationStepHistory } from "./operation-step-history";
+import { readPlanReviewIntent } from "./plan-review-link";
 import { recordedOperationForPlan, renderPlanReview } from "./plan-review-view";
 import { Session } from "./session";
 import { renderObservation, text } from "./view";
@@ -91,6 +92,11 @@ const navigation = createNavigation(app, () => {
   ])
     element(id).replaceChildren();
   element("operation-events-details").removeAttribute("open");
+  const planIntent = readPlanReviewIntent(window.location.hash);
+  if (snapshot && planIntent.kind !== "none") {
+    selectedPlanId = planIntent.kind === "plan" ? planIntent.id : "";
+    renderPlans(snapshot.plans);
+  }
 });
 const selectedInventory = () => {
   const matches = snapshot?.inventory.filter((i) => i.vpc_id === element<HTMLSelectElement>("vpc").value);
@@ -409,6 +415,7 @@ function renderPlans(plans: Plan[]) {
       element("notice").replaceChildren();
       selectedPlanId = id;
       renderPlans(plans);
+      if (readPlanReviewIntent(window.location.hash).kind !== "none") navigation.navigate("plans");
       element("plan-selection").focus();
     },
     makeApply: (plan) =>
@@ -735,6 +742,8 @@ function renderAwsAccounts() {
 }
 async function refresh() {
   snapshot = await request<Snapshot>("/snapshot");
+  const planIntent = readPlanReviewIntent(window.location.hash);
+  if (planIntent.kind !== "none") selectedPlanId = planIntent.kind === "plan" ? planIntent.id : "";
   navigation.authenticate(true);
   element("identity").textContent =
     `${snapshot.mode} authentication · ${snapshot.role} · simulated execution · AWS read-only ${snapshot.aws_read_only_enabled ? "enabled" : "disabled"}`;

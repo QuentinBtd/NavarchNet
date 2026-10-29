@@ -1,3 +1,5 @@
+import { readPlanReviewIntent } from "./plan-review-link";
+
 const routes = {
   overview: "overview",
   accounts: "accounts",
@@ -17,7 +19,7 @@ export function createNavigation(root: HTMLElement, onNavigate: () => void) {
   const workspace = root.querySelector<HTMLElement>("#workspace");
   if (!signIn || !actions || !workspace) throw new Error("Navigation shell missing");
   let authenticated = false;
-  let current: WorkspaceRoute | undefined;
+  let currentHash: string | undefined;
   function render() {
     if (!root.isConnected) {
       window.removeEventListener("hashchange", render);
@@ -25,12 +27,15 @@ export function createNavigation(root: HTMLElement, onNavigate: () => void) {
       return;
     }
     const raw = window.location.hash.slice(2);
-    const route: WorkspaceRoute = Object.hasOwn(routes, raw) ? (raw as WorkspaceRoute) : "overview";
-    if (window.location.hash !== `#/${route}`)
-      window.history.replaceState(null, "", `${window.location.pathname}${window.location.search}#/${route}`);
-    if (authenticated && current !== undefined && current !== route) onNavigate();
-    const changed = current !== route;
-    current = route;
+    const intent = readPlanReviewIntent(window.location.hash);
+    const route: WorkspaceRoute =
+      intent.kind !== "none" ? "plans" : Object.hasOwn(routes, raw) ? (raw as WorkspaceRoute) : "overview";
+    const hash = intent.kind !== "none" ? intent.hash : `#/${route}`;
+    if (window.location.hash !== hash)
+      window.history.replaceState(null, "", `${window.location.pathname}${window.location.search}${hash}`);
+    if (authenticated && currentHash !== undefined && currentHash !== hash) onNavigate();
+    const changed = currentHash !== hash;
+    currentHash = hash;
     for (const section of root.querySelectorAll<HTMLElement>("[data-workspace]")) {
       const hidden = !authenticated || section.id !== routes[route];
       section.hidden = hidden;

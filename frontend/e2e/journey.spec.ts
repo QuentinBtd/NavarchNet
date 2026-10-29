@@ -544,6 +544,57 @@ test("real browser: register, discover, plan, apply, observe drift and partial f
     expect(await page.evaluate(() => document.documentElement.scrollWidth <= innerWidth)).toBe(true);
     await actionDetail.screenshot({ path: testInfo.outputPath(`plan-action-detail-${label}.png`) });
   }
+
+  // All previous focused-action, original-evidence and nonmutation assertions remain unchanged.
+  expect(actionSnapshot.plans.length).toBeGreaterThan(1);
+  const linkedOriginal = actionSnapshot.plans.at(-1);
+  expect(linkedOriginal).toBeDefined();
+  expect(linkedOriginal.id).not.toBe(actionSnapshot.plans[0].id);
+  await page.locator("#plan-selection").selectOption(linkedOriginal.id);
+  await expect(page.locator("#plan-list article")).toHaveAttribute("data-plan-id", linkedOriginal.id);
+  const linkBefore = await (await page.request.get("/api/v1/snapshot", { headers: readerHeaders })).json();
+  expect(linkBefore).toEqual(actionSnapshot);
+  const linkCalls = reviewCalls.length;
+  const returnedPlanLink = page.getByRole("link", { name: "Link to this returned plan", exact: true });
+  await expect(returnedPlanLink).toBeVisible();
+  await expect(returnedPlanLink).toHaveAttribute(
+    "href",
+    `#/plans?plan=${encodeURIComponent(linkedOriginal.id)}`,
+  );
+  await returnedPlanLink.focus();
+  await page.keyboard.press("Enter");
+  await expect
+    .poll(() => new URL(page.url()).hash)
+    .toBe(`#/plans?plan=${encodeURIComponent(linkedOriginal.id)}`);
+  await expect(page.locator("#plan-list article")).toHaveAttribute("data-plan-id", linkedOriginal.id);
+  expect(reviewCalls.slice(linkCalls)).toEqual([]);
+  const reloadCalls = reviewCalls.length;
+  await page.reload();
+  await page
+    .getByLabel("Demo token or OIDC access token")
+    .fill("browser-test-reader-credential-free-local-only");
+  await page.getByRole("button", { name: "Connect", exact: true }).click();
+  await expect(page.locator("#plans")).toBeVisible();
+  await expect(page.locator("#plan-list article")).toHaveAttribute("data-plan-id", linkedOriginal.id);
+  await expect(page.locator("#plan-selection")).toHaveValue(linkedOriginal.id);
+  await expect(page.getByRole("button", { name: "Apply reviewed plan", exact: true })).toBeDisabled();
+  expect(reviewCalls.slice(reloadCalls).map((url) => new URL(url).pathname)).toEqual(["/api/v1/snapshot"]);
+  await page.getByText("Technical plan identifiers & original evidence", { exact: true }).click();
+  expect(
+    JSON.parse((await page.locator("#plans details").first().locator("pre").textContent()) ?? "null"),
+  ).toEqual(linkedOriginal);
+  await page.getByText("Technical plan identifiers & original evidence", { exact: true }).click();
+  expect(await (await page.request.get("/api/v1/snapshot", { headers: readerHeaders })).json()).toEqual(
+    linkBefore,
+  );
+  for (const [width, height, label] of [
+    [1440, 1080, "desktop"],
+    [390, 844, "mobile"],
+  ] as const) {
+    await page.setViewportSize({ width, height });
+    expect(await page.evaluate(() => document.documentElement.scrollWidth <= innerWidth)).toBe(true);
+    await page.locator("#plans").screenshot({ path: testInfo.outputPath(`plan-review-link-${label}.png`) });
+  }
 });
 
 test("read-only session cannot mutate through UI or API", async ({ page, request }) => {

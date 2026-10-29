@@ -1,6 +1,7 @@
 import type { ActionKind, Inventory, Operation, Plan, RegionalNetwork, Snapshot } from "./generated";
 import { configurationForPlan, workspaceForPlan } from "./network-workspace";
 import { renderPlanActionDetail } from "./plan-action-detail";
+import { planReviewHref } from "./plan-review-link";
 import { renderPlanSnapshotRevisions } from "./plan-snapshot-revisions";
 import { text } from "./view";
 
@@ -337,6 +338,38 @@ export function renderPlanReview(plans: Plan[], options: ReviewOptions): HTMLEle
     () => options.isCurrent() && root.contains(card) && card.contains(actionDetail),
   );
   card.append(actionDetail);
+  const href = planReviewHref(plan.id);
+  if (href) {
+    const originalId = plan.id;
+    const link = text("a", "Link to this returned plan");
+    link.dataset.planReviewLink = "";
+    link.href = href;
+    link.onclick = (event) => {
+      try {
+        if (
+          !root.isConnected ||
+          !root.contains(link) ||
+          !options.isCurrent() ||
+          link.getAttribute("aria-disabled") === "true" ||
+          link.getAttribute("href") !== href ||
+          plan.id !== originalId ||
+          plans.filter((row) => row.id === originalId).length !== 1 ||
+          !plans.includes(plan) ||
+          JSON.stringify(plan, null, 2) !== originalJson
+        )
+          event.preventDefault();
+      } catch {
+        event.preventDefault();
+      }
+    };
+    card.append(
+      link,
+      text(
+        "p",
+        "Selects this identity in returned history after authentication; not a permanent storage link.",
+      ),
+    );
+  }
   root.append(card);
   return root;
 }

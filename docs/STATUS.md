@@ -2,7 +2,17 @@
 
 NavarchNet has an implemented fake-provider journey and a locally exercised AWS read-only account/topology slice, not a completed AWS V1 orchestrator. No live AWS API call/resource mutation, release/tag publication, crates.io upload or GHCR upload has occurred.
 
-## Current continuation — original requested subnet context in the map
+## Current continuation — authenticated links to exact returned plans
+
+Plan review now exposes an internal fragment link containing only the original opaque Plan ID. After authentication and the existing snapshot read, it selects that exact uniquely returned identity, including after reload; it does not fetch a plan individually or promise permanent storage/history retention. Missing, duplicated or invalid identities stay unavailable rather than falling back to the first/latest plan. Same-workspace identity changes and browser history retire old publication, while manual selection clears explicit URL intent so Refresh does not restore the old linked identity. Bare-route creation/apply followup behavior, reader permissions and explicit mutation controls remain unchanged.
+
+Strict bounded decoding preserves literal Unicode, plus signs and percent characters without trimming or repairing IDs. Retained links revalidate original membership/identity/full JSON, current connected controls and the exact href; failed serialization cancels activation. The link contains no request/provider record or authentication token. No endpoint, form, backend/model/dependency, authorization policy or automatic generation/apply is added.
+
+Final 281 frontend functions/28 files/types/lint/build and five actual core server/PostgreSQL browser functions pass on equal 891 before/after pins. The native suffix follows all old assertions, establishes a real nonfirst original Plan, activates by keyboard, reloads, reauthenticates and compares its complete JSON/digest with disabled reader Apply, unchanged authoritative snapshot and no additional display queries. Desktop/mobile captures are inspected. All 27 old unit files/CSS and the complete prior native baseline are preserved; three frontend functions added, zero Rust/Node/native. Original missing-link, click-serialization, query-routing, reload-selection, typed retained-link/same-view selection and manual-URL REDs remain distinct. First 279-function and final tested sources were retained before later tests/documentation respectively. Independent review, normal installed hooks and draft-PR publication remain separate pending gates, not final UX, permanent storage or full-mission acceptance.
+
+## Delivered checkpoint — original requested subnet context in the map
+
+Commit `c0cbb0f726e88d26b4f250bcd817f0e815eb68f4` delivered this checkpoint after independent acceptance, normal installed hooks and exact remote/source/runtime/assets/draft-PR readback. Pending wording below is its capture-time state, not an active blocker.
 
 Explicitly locating an immutable Plan on the simulation map now carries its original requested subnet subset into the existing inspector and labels only uniquely matching current subnet nodes. Original ordered IDs and Plan identity/digest stay separate from current record matches and inventory revision: neither establishes historical membership, an applied connection, validity, ownership, health or connectivity. Missing or duplicate current IDs preserve the original requested list with unavailable match guidance and no partial badges. Invalid original/source context has no plausible requested prefix. Existing map scope eligibility, primary controls, read-only rights and explicit configuration/generation remain unchanged; unsupported form policy or repeated VPC literals across accounts do not become new read/navigation gates.
 
