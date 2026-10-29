@@ -24,7 +24,7 @@ import type {
   VpcLookupResponse,
 } from "./generated";
 import { createNavigation } from "./navigation";
-import { renderNetworkWorkspace } from "./network-workspace";
+import { plansForWorkspaceScope, renderNetworkWorkspace } from "./network-workspace";
 import { renderOperationReview } from "./operation-review-view";
 import { recordedOperationForPlan, renderPlanReview } from "./plan-review-view";
 import { Session } from "./session";
@@ -168,6 +168,20 @@ function renderNetworkContext() {
       },
       get canConfigure() {
         return isAdmin();
+      },
+      plans: source.plans,
+      onReviewPlan: (plan, inventory, network) => {
+        if (
+          !isCurrent() ||
+          !plansForWorkspaceScope(source, inventory, network)?.includes(plan) ||
+          workspaceSelection.networkId !== network.id ||
+          workspaceSelection.inventoryKey !== JSON.stringify([inventory.account_id, inventory.vpc_id])
+        )
+          return;
+        session.retireRequests();
+        selectedPlanId = plan.id;
+        renderPlans(source.plans);
+        navigation.navigate("plans");
       },
       onConfigure: (inventory, network, subnet) => {
         if (!isCurrent() || !isAdmin()) return;

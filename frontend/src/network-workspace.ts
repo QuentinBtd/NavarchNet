@@ -1,4 +1,4 @@
-import type { Inventory, RegionalNetwork, Snapshot, Subnet } from "./generated";
+import type { Inventory, Plan, RegionalNetwork, Snapshot, Subnet } from "./generated";
 import { text } from "./view";
 
 type Selection = { networkId?: string; inventoryKey?: string };
@@ -9,6 +9,8 @@ type Options = {
   onSelection: (selection: Selection) => void;
   canConfigure?: boolean;
   onConfigure?: (inventory: Inventory, network: RegionalNetwork, subnet?: Subnet) => void;
+  plans?: Plan[];
+  onReviewPlan?: (plan: Plan, inventory: Inventory, network: RegionalNetwork) => void;
 };
 type Resource = { kind: "network" } | { kind: "vpc" } | { kind: "subnet"; index: number };
 const inventoryKey = (i: Inventory) => JSON.stringify([i.account_id, i.vpc_id]);
@@ -49,6 +51,35 @@ function validContext(data: Context) {
     new Set(data.networks.map((n) => n.id)).size === data.networks.length &&
     new Set(data.accounts.map((a) => a.id)).size === data.accounts.length &&
     new Set(data.inventory.map(inventoryKey)).size === data.inventory.length
+  );
+}
+
+// Literal request association in returned history, not validity, application or connectivity.
+export function plansForWorkspaceScope(
+  data: Context & Pick<Snapshot, "plans">,
+  inventory: Inventory,
+  network: RegionalNetwork,
+): Plan[] | undefined {
+  if (
+    !validContext(data) ||
+    !data.inventory.includes(inventory) ||
+    !data.networks.includes(network) ||
+    !collection(
+      data.plans,
+      (p) =>
+        literal(p.id) &&
+        !!p.request &&
+        [p.request.account_id, p.request.vpc_id, p.request.network_id].every(literal) &&
+        collection(p.request.subnet_ids, literal),
+    ) ||
+    new Set(data.plans.map((p) => p.id)).size !== data.plans.length
+  )
+    return undefined;
+  return data.plans.filter(
+    (p) =>
+      p.request.account_id === inventory.account_id &&
+      p.request.vpc_id === inventory.vpc_id &&
+      p.request.network_id === network.id,
   );
 }
 
@@ -279,6 +310,59 @@ export function renderNetworkWorkspace(data: Context, options: Options): HTMLEle
         details.append(text("pre", JSON.stringify(original, null, 2)));
     };
     aside.append(details);
+    if (inventory && resource.kind === "vpc" && options.onReviewPlan) {
+      const candidates = () =>
+        options.plans === undefined
+          ? undefined
+          : plansForWorkspaceScope({ ...data, plans: options.plans }, inventory, network);
+      const matches = candidates();
+      if (matches === undefined) {
+        aside.append(text("p", "Saved plan context unavailable or ambiguous. Refresh the snapshot."));
+      } else if (matches.length === 0) {
+        aside.append(
+          text("p", "No matching plan in returned history. This is not complete storage history."),
+        );
+      } else {
+        const history = document.createElement("div");
+        const label = text("label", "Saved plans for selected VPC");
+        const picker = document.createElement("select");
+        picker.id = "workspace-plan";
+        label.htmlFor = picker.id;
+        const placeholder = text("option", "Choose a returned plan");
+        placeholder.value = "";
+        picker.append(placeholder);
+        for (const plan of matches) {
+          const option = text(
+            "option",
+            `${plan.request.subnet_ids.length} requested subnets · ${plan.id.slice(0, 8)}`,
+          );
+          option.value = plan.id;
+          picker.append(option);
+        }
+        const selectedPlan = () => candidates()?.find((p) => p.id === picker.value);
+        const review = text("button", "Review selected saved plan");
+        review.type = "button";
+        review.disabled = true;
+        picker.onchange = () => {
+          if (!picker.disabled && active(picker)) review.disabled = !selectedPlan();
+        };
+        review.onclick = () => {
+          if (review.disabled || !active(review) || picker.disabled || !active(picker)) return;
+          const plan = selectedPlan();
+          if (plan) options.onReviewPlan?.(plan, inventory, network);
+        };
+        history.append(
+          text(
+            "p",
+            `${matches.length} matching returned plans · bounded history, not current validity or applied connectivity.`,
+          ),
+          label,
+          picker,
+          review,
+        );
+        aside.append(history);
+      }
+    }
     body.append(map, aside);
     const explanation = text(
       "p",

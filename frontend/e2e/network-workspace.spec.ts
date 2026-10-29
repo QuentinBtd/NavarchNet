@@ -332,4 +332,71 @@ test("real API simulation inventory has a scoped network map and read-only inspe
     allow_application_traffic: false,
   });
   await expect(page.locator("#plan-list article")).toHaveAttribute("data-plan-id", contextualPlan.id);
+
+  // Preserve every prior map/configuration/export/context oracle above.
+  // Read existing plans for this explicit map scope rather than generating another.
+  await page.getByRole("button", { name: "Sign out" }).click();
+  await page.goto("/#/plans");
+  await page
+    .getByLabel("Demo token or OIDC access token")
+    .fill("browser-test-reader-credential-free-local-only");
+  await page.getByRole("button", { name: "Connect", exact: true }).click();
+  await expect(page.locator("#plan-selection")).toBeVisible();
+  await page.locator("#plan-selection").selectOption(contextualPlan.id);
+  await expect(page.locator("#plan-list article")).toHaveAttribute("data-plan-id", contextualPlan.id);
+  await page
+    .getByRole("navigation", { name: "Workspace" })
+    .getByRole("link", { name: "Regional networks", exact: true })
+    .click();
+  await page.getByLabel("Regional network in workspace", { exact: true }).selectOption(network.id);
+  await page
+    .getByLabel("VPC in workspace", { exact: true })
+    .selectOption(JSON.stringify([account.id, inventory.vpc_id]));
+  await page
+    .getByRole("button", { name: `Inspect application VPC ${inventory.vpc_id}`, exact: true })
+    .click();
+  const historyBefore = await (await request.get("/api/v1/snapshot", { headers })).json();
+  const matchingPlans = historyBefore.plans.filter(
+    (p: typeof body) =>
+      p.request.account_id === account.id &&
+      p.request.vpc_id === inventory.vpc_id &&
+      p.request.network_id === network.id,
+  );
+  expect(matchingPlans.map((p: typeof body) => p.id).sort()).toEqual([body.id, subsetPlan.id].sort());
+  expect(historyBefore.plans).toContainEqual(contextualPlan);
+  const historyCalls = localCalls.length;
+  const savedPlans = page.getByLabel("Saved plans for selected VPC", { exact: true });
+  await expect(savedPlans).toBeVisible();
+  expect(
+    await savedPlans
+      .locator("option")
+      .evaluateAll((nodes) => nodes.map((n) => (n as HTMLOptionElement).value)),
+  ).toEqual(["", ...matchingPlans.map((p: typeof body) => p.id)]);
+  const reviewSaved = page.getByRole("button", { name: "Review selected saved plan", exact: true });
+  await expect(reviewSaved).toBeDisabled();
+  await savedPlans.selectOption(body.id);
+  await expect(reviewSaved).toBeEnabled();
+  for (const [width, height, label] of [
+    [1440, 1000, "desktop"],
+    [390, 844, "mobile"],
+  ] as const) {
+    await page.setViewportSize({ width, height });
+    expect(await page.evaluate(() => document.documentElement.scrollWidth <= innerWidth)).toBe(true);
+    await page
+      .locator("#network-list")
+      .screenshot({ path: testInfo.outputPath(`workspace-saved-plan-${label}.png`) });
+  }
+  await reviewSaved.focus();
+  await page.keyboard.press("Enter");
+  await expect(page).toHaveURL(/#\/plans$/);
+  await expect(page.locator("#plan-list article")).toHaveAttribute("data-plan-id", body.id);
+  await expect(page.locator("#plan-list")).toContainText(body.digest);
+  await expect(page.locator("#plan-list button[data-write]")).toBeDisabled();
+  const originalPlan = page
+    .locator("#plan-list article details")
+    .filter({ has: page.locator("summary", { hasText: "Technical plan identifiers & original evidence" }) });
+  await originalPlan.locator("summary").click();
+  expect(JSON.parse(await originalPlan.locator("pre").innerText())).toEqual(body);
+  expect(localCalls).toHaveLength(historyCalls);
+  expect(await (await request.get("/api/v1/snapshot", { headers })).json()).toEqual(historyBefore);
 });
