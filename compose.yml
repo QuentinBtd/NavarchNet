@@ -1,0 +1,35 @@
+services:
+  database:
+    image: postgres:17.11-bookworm@sha256:3645570cccdfa447589da9f57dd740faa29b30938e861289a5574b6ca6b03826
+    environment:
+      POSTGRES_DB: navarchnet
+      POSTGRES_USER: navarchnet
+      POSTGRES_PASSWORD: ${DATABASE_PASSWORD:?Set DATABASE_PASSWORD}
+    volumes:
+      - postgres-data:/var/lib/postgresql/data
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U navarchnet -d navarchnet"]
+      interval: 5s
+      timeout: 3s
+      retries: 20
+    restart: unless-stopped
+  app:
+    build: .
+    environment:
+      DATABASE_URL: postgres://navarchnet:${DATABASE_PASSWORD:?Set DATABASE_PASSWORD}@database:5432/navarchnet
+      NAVARCHNET_AUTH_MODE: demo
+      NAVARCHNET_ALLOW_DEMO_NETWORK: "true"
+      NAVARCHNET_ADMIN_TOKEN: ${NAVARCHNET_ADMIN_TOKEN:?Set NAVARCHNET_ADMIN_TOKEN}
+      NAVARCHNET_READER_TOKEN: ${NAVARCHNET_READER_TOKEN:?Set NAVARCHNET_READER_TOKEN}
+      RUST_LOG: navarchnet=info
+    ports: ["127.0.0.1:8080:8080"]
+    depends_on:
+      database:
+        condition: service_healthy
+    read_only: true
+    cap_drop: ["ALL"]
+    security_opt: ["no-new-privileges:true"]
+    restart: unless-stopped
+    stop_grace_period: 30s
+volumes:
+  postgres-data:

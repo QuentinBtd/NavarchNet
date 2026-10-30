@@ -1,0 +1,135 @@
+name: Manual validation
+on:
+  workflow_dispatch:
+    inputs:
+      suite:
+        description: Explicit qualification to run (uses GitHub Actions minutes)
+        required: true
+        default: verify
+        type: choice
+        options: [verify, containers, packages, all]
+permissions:
+  contents: read
+concurrency:
+  group: ci-${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
+jobs:
+  verify:
+    if: inputs.suite == 'verify' || inputs.suite == 'all'
+    runs-on: ubuntu-24.04
+    timeout-minutes: 40
+    services:
+      postgres:
+        image: postgres:17.11-bookworm@sha256:3645570cccdfa447589da9f57dd740faa29b30938e861289a5574b6ca6b03826
+        env:
+          POSTGRES_USER: navarchnet
+          POSTGRES_PASSWORD: ci-only-disposable-database
+          POSTGRES_DB: navarchnet
+        ports: ["5432:5432"]
+        options: >-
+          --health-cmd "pg_isready -U navarchnet -d navarchnet"
+          --health-interval 5s --health-timeout 3s --health-retries 20
+    env:
+      DATABASE_URL: postgres://navarchnet:ci-only-disposable-database@127.0.0.1:5432/navarchnet
+      CARGO_BUILD_JOBS: 1
+      CARGO_INCREMENTAL: 0
+      CARGO_PROFILE_DEV_DEBUG: 0
+      NPM_CONFIG_CACHE: ${{ github.workspace }}/.local/npm-cache
+    steps:
+      - uses: actions/checkout@d23441a48e516b6c34aea4fa41551a30e30af803 # v6
+        with:
+          persist-credentials: false
+      - uses: jdx/mise-action@fc42bcc7ddbf51124c30f95a877a0c5168a3bfde # v5.2.1
+        with:
+          version: 2026.9.18
+          persist_github_token: false
+      - uses: Swatinem/rust-cache@49a0bdc70d2e1b713ca9e2869b211fcce03d3c1c # v2
+        with:
+          save-if: ${{ github.ref == 'refs/heads/main' }}
+      - name: Format, lint, migrations, PostgreSQL, UI, type contract and crash smoke
+        run: mise run check
+      - name: License notices and dependency security policy
+        run: mise run audit
+      - name: Install isolated browser runtime
+        run: |
+          mise exec -- frontend/node_modules/.bin/playwright install-deps chromium
+          mise run browser-install
+      - name: Real browser, backend and PostgreSQL journey
+        run: mise run browser
+      - uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4
+        if: failure()
+        with:
+          name: browser-failure-evidence
+          path: frontend/test-results/
+          retention-days: 7
+  containers:
+    if: inputs.suite == 'containers' || inputs.suite == 'all'
+    runs-on: ubuntu-24.04
+    timeout-minutes: 40
+    steps:
+      - uses: actions/checkout@d23441a48e516b6c34aea4fa41551a30e30af803 # v6
+        with:
+          persist-credentials: false
+      - uses: jdx/mise-action@fc42bcc7ddbf51124c30f95a877a0c5168a3bfde # v5.2.1
+        with:
+          version: 2026.9.18
+          persist_github_token: false
+      - name: Build and exercise credential-free container demo
+        env:
+          DATABASE_PASSWORD: ci-only-disposable-database
+          NAVARCHNET_ADMIN_TOKEN: ci-only-demo-admin-token-not-a-secret-0001
+          NAVARCHNET_READER_TOKEN: ci-only-demo-reader-token-not-a-secret-0002
+        run: mise run containers
+  package-dry-run:
+    if: inputs.suite == 'packages' || inputs.suite == 'all'
+    services:
+      postgres:
+        image: postgres:17.11-bookworm@sha256:3645570cccdfa447589da9f57dd740faa29b30938e861289a5574b6ca6b03826
+        env:
+          POSTGRES_USER: navarchnet
+          POSTGRES_PASSWORD: ci-only-disposable-database
+          POSTGRES_DB: navarchnet
+        ports: ["5432:5432"]
+        options: >-
+          --health-cmd "pg_isready -U navarchnet -d navarchnet"
+          --health-interval 5s --health-timeout 3s --health-retries 20
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - runner: ubuntu-24.04
+            target: x86_64-unknown-linux-gnu
+          - runner: ubuntu-24.04-arm
+            target: aarch64-unknown-linux-gnu
+    runs-on: ${{ matrix.runner }}
+    timeout-minutes: 40
+    env:
+      CARGO_BUILD_JOBS: 1
+      CARGO_INCREMENTAL: 0
+      NPM_CONFIG_CACHE: ${{ github.workspace }}/.local/npm-cache
+      DATABASE_URL: postgres://navarchnet:ci-only-disposable-database@127.0.0.1:5432/navarchnet
+    steps:
+      - uses: actions/checkout@d23441a48e516b6c34aea4fa41551a30e30af803 # v6
+        with:
+          persist-credentials: false
+      - uses: jdx/mise-action@fc42bcc7ddbf51124c30f95a877a0c5168a3bfde # v5.2.1
+        with:
+          version: 2026.9.18
+          persist_github_token: false
+      - uses: Swatinem/rust-cache@49a0bdc70d2e1b713ca9e2869b211fcce03d3c1c # v2
+        with:
+          save-if: ${{ github.ref == 'refs/heads/main' }}
+          key: dist-${{ matrix.target }}
+      - name: Build frontend and package without publishing
+        env:
+          DIST_TARGET: ${{ matrix.target }}
+        run: mise run package
+      - uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4
+        with:
+          name: package-dry-run-${{ matrix.target }}
+          path: |
+            target/distrib/*.tar.xz
+            target/distrib/*.sha256
+            .local/reports/dist-plan.json
+          if-no-files-found: error
+          retention-days: 7
