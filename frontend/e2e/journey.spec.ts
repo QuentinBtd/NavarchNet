@@ -858,6 +858,76 @@ test("real browser: register, discover, plan, apply, observe drift and partial f
   expect(await (await page.request.get("/api/v1/snapshot", { headers: readerHeaders })).json()).toEqual(
     historySearchBefore,
   );
+
+  // Plan search follows every previous operation-search and nonmutation assertion.
+  const planSearchBefore = await (
+    await page.request.get("/api/v1/snapshot", { headers: readerHeaders })
+  ).json();
+  expect(planSearchBefore).toEqual(historySearchBefore);
+  expect(planSearchBefore.plans.length).toBeGreaterThan(1);
+  const firstSearchPlan = planSearchBefore.plans[0],
+    secondSearchPlan = planSearchBefore.plans[1];
+  expect(firstSearchPlan.id).not.toBe(secondSearchPlan.id);
+  await page
+    .getByRole("navigation", { name: "Workspace" })
+    .getByRole("link", { name: "Connections / plans", exact: true })
+    .click();
+  await expect(page.locator("#connect")).toBeVisible();
+  await page.getByRole("link", { name: "Review existing change plans", exact: true }).click();
+  await expect(page.locator("#plans")).toBeVisible();
+  await page.locator("#plan-selection").selectOption(firstSearchPlan.id);
+  await expect(page.locator("#plan-list article")).toHaveAttribute("data-plan-id", firstSearchPlan.id);
+  await page.getByText("Technical plan identifiers & original evidence", { exact: true }).click();
+  expect(
+    JSON.parse((await page.locator("#plan-list article details pre").first().textContent()) ?? "null"),
+  ).toEqual(firstSearchPlan);
+  await page.getByText("Technical plan identifiers & original evidence", { exact: true }).click();
+  const planSearchCalls = reviewCalls.length;
+  const planSearch = page.getByRole("searchbox", { name: "Search returned plans", exact: true });
+  await expect(planSearch).toBeVisible();
+  await planSearch.focus();
+  await page.keyboard.type(secondSearchPlan.id);
+  await expect(planSearch).toBeFocused();
+  await expect(planSearch).toHaveValue(secondSearchPlan.id);
+  expect(
+    await page
+      .locator("#plan-selection option")
+      .evaluateAll((options) => options.map((option) => (option as HTMLOptionElement).value)),
+  ).toEqual([secondSearchPlan.id]);
+  await expect(page.locator("#plan-list article")).toHaveAttribute("data-plan-id", firstSearchPlan.id);
+  await expect(page.locator('#plan-list [role="status"]')).toContainText(
+    "Selected plan is outside search results; its original detail is unchanged.",
+  );
+  await expect(page.getByRole("button", { name: "Apply reviewed plan", exact: true })).toBeDisabled();
+  for (const [width, height, label] of [
+    [1440, 1080, "desktop"],
+    [390, 844, "mobile"],
+  ] as const) {
+    await page.setViewportSize({ width, height });
+    expect(await page.evaluate(() => document.documentElement.scrollWidth <= innerWidth)).toBe(true);
+    await page
+      .locator("#plans")
+      .screenshot({ path: testInfo.outputPath(`plan-history-search-${label}.png`) });
+  }
+  await page.locator("#plan-selection").selectOption(secondSearchPlan.id);
+  await expect(page.locator("#plan-list article")).toHaveAttribute("data-plan-id", secondSearchPlan.id);
+  await expect(planSearch).toHaveValue(secondSearchPlan.id);
+  await page.getByText("Technical plan identifiers & original evidence", { exact: true }).click();
+  expect(
+    JSON.parse((await page.locator("#plan-list article details pre").first().textContent()) ?? "null"),
+  ).toEqual(secondSearchPlan);
+  await planSearch.fill("");
+  await expect(planSearch).toBeFocused();
+  expect(
+    await page
+      .locator("#plan-selection option")
+      .evaluateAll((options) => options.map((option) => (option as HTMLOptionElement).value)),
+  ).toEqual(planSearchBefore.plans.map((row: { id: string }) => row.id));
+  await expect(page.locator("#plan-list article")).toHaveAttribute("data-plan-id", secondSearchPlan.id);
+  expect(reviewCalls.slice(planSearchCalls)).toEqual([]);
+  expect(await (await page.request.get("/api/v1/snapshot", { headers: readerHeaders })).json()).toEqual(
+    planSearchBefore,
+  );
 });
 
 test("read-only session cannot mutate through UI or API", async ({ page, request }) => {

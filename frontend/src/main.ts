@@ -54,6 +54,7 @@ let snapshot: Snapshot | undefined;
 let selectedAwsAccountId: string | undefined;
 let awsViewVersion = 0;
 let selectedPlanId: string | undefined;
+let planSearch = { query: "" };
 let planViewVersion = 0;
 let selectedOperationId: string | undefined;
 let operationSearch = { query: "" };
@@ -303,11 +304,17 @@ function renderPlans(plans: Plan[]) {
   };
   const version = ++planViewVersion;
   const isCurrent = () =>
-    version === planViewVersion && app?.isConnected === true && !!snapshot && !element("plans").hidden;
+    version === planViewVersion &&
+    snapshot === source &&
+    source?.plans === plans &&
+    app?.isConnected === true &&
+    !!snapshot &&
+    !element("plans").hidden;
   let prepareRoot: HTMLElement | undefined;
   let prepareControl: HTMLButtonElement | undefined;
   prepareRoot = renderPlanReview(plans, {
     selectedPlanId,
+    searchState: planSearch,
     isCurrent,
     currentSnapshot: source,
     workspaceSnapshot: source,
@@ -834,6 +841,7 @@ function clearSession() {
   ++operationViewVersion;
   clearOperationEvidence();
   selectedPlanId = undefined;
+  planSearch = { query: "" };
   ++planViewVersion;
   connectionStep(false);
   element<HTMLFormElement>("aws-register").reset();

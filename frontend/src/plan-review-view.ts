@@ -1,6 +1,7 @@
 import type { ActionKind, Inventory, Operation, Plan, RegionalNetwork, Snapshot } from "./generated";
 import { configurationForPlan, workspaceForPlan } from "./network-workspace";
 import { renderPlanActionDetail } from "./plan-action-detail";
+import { type PlanSearchState, planHistorySearch } from "./plan-history-search";
 import { planReviewHref } from "./plan-review-link";
 import { renderPlanSnapshotRevisions } from "./plan-snapshot-revisions";
 import { text } from "./view";
@@ -14,6 +15,7 @@ export const actionLabels: Record<ActionKind, string> = {
 };
 type ReviewOptions = {
   selectedPlanId?: string;
+  searchState?: PlanSearchState;
   isCurrent: () => boolean;
   onSelect: (id: string) => void;
   makeApply: (plan: Plan) => HTMLButtonElement;
@@ -154,11 +156,27 @@ export function renderPlanReview(plans: Plan[], options: ReviewOptions): HTMLEle
     select.append(option);
   }
   select.value = selectedId ?? "";
+  root.append(label, select);
+  const search = planHistorySearch(
+    root,
+    select,
+    plans,
+    selectedId,
+    options.isCurrent,
+    options.searchState ?? { query: "" },
+  );
+  root.insertBefore(search.controls, label);
   select.onchange = () => {
-    if (root.isConnected && options.isCurrent() && plans.some((plan) => plan.id === select.value))
+    if (
+      root.isConnected &&
+      select.parentElement === root &&
+      !select.disabled &&
+      options.isCurrent() &&
+      search.canSelect(select.value) &&
+      plans.some((plan) => plan.id === select.value)
+    )
       options.onSelect(select.value);
   };
-  root.append(label, select);
   const matches = plans.filter((plan) => plan.id === selectedId);
   if (matches.length !== 1) {
     select.value = "";
