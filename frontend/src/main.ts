@@ -51,6 +51,34 @@ function element<T extends HTMLElement = HTMLElement>(id: string): T {
 }
 const session = new Session();
 let snapshot: Snapshot | undefined;
+const browserNetworkNotice = element("browser-network-notice");
+const browserNetworkParent = browserNetworkNotice.parentElement;
+let browserWasOffline = false;
+function updateBrowserNetworkHint(reset = false) {
+  if (reset) browserWasOffline = false;
+  if (
+    !app?.isConnected ||
+    !browserNetworkNotice.isConnected ||
+    browserNetworkNotice.parentElement !== browserNetworkParent ||
+    !element("workspace").contains(browserNetworkNotice)
+  )
+    return;
+  browserNetworkNotice.replaceChildren();
+  browserNetworkNotice.hidden = true;
+  if (!snapshot || element("workspace").hidden) return;
+  const online = navigator.onLine;
+  if (online === false) {
+    browserWasOffline = true;
+    browserNetworkNotice.textContent =
+      "Browser reports offline. Displayed data is retained; server reachability and connectivity are unknown.";
+  } else if (online === true && browserWasOffline) {
+    browserNetworkNotice.textContent =
+      "Browser reports online. Refresh explicitly to request saved data; this does not prove server reachability or connectivity.";
+  }
+  browserNetworkNotice.hidden = browserNetworkNotice.textContent === "";
+}
+window.addEventListener("offline", () => updateBrowserNetworkHint());
+window.addEventListener("online", () => updateBrowserNetworkHint());
 let selectedAwsAccountId: string | undefined;
 let awsViewVersion = 0;
 let selectedPlanId: string | undefined;
@@ -824,6 +852,7 @@ async function refresh() {
   for (const node of document.querySelectorAll<HTMLButtonElement>("[data-write]")) node.disabled = !isAdmin();
   for (const node of document.querySelectorAll<HTMLButtonElement>("[data-aws-write]"))
     node.disabled = !isAdmin() || !snapshot.aws_read_only_enabled;
+  updateBrowserNetworkHint(true);
 }
 element<HTMLFormElement>("login").onsubmit = (event) => {
   event.preventDefault();
@@ -851,6 +880,7 @@ function clearSession() {
   session.logout();
   snapshot = undefined;
   navigation.authenticate(false);
+  updateBrowserNetworkHint(true);
   element("identity").textContent = "Signed out";
   for (const id of [
     "diagnostic-output",

@@ -928,6 +928,60 @@ test("real browser: register, discover, plan, apply, observe drift and partial f
   expect(await (await page.request.get("/api/v1/snapshot", { headers: readerHeaders })).json()).toEqual(
     planSearchBefore,
   );
+
+  // Browser hints never turn retained data into a server/AWS connectivity claim.
+  const browserHintBefore = await (
+    await page.request.get("/api/v1/snapshot", { headers: readerHeaders })
+  ).json();
+  expect(browserHintBefore).toEqual(planSearchBefore);
+  const browserHintCalls = reviewCalls.length;
+  await page.context().setOffline(true);
+  expect(await page.evaluate(() => navigator.onLine)).toBe(false);
+  const browserHint = page.getByRole("status", { name: "Browser network hint", exact: true });
+  await expect(browserHint).toBeVisible();
+  await expect(browserHint).toContainText("Browser reports offline.");
+  await expect(browserHint).toContainText("server reachability and connectivity are unknown");
+  await expect(page.locator("#plan-list article")).toHaveAttribute("data-plan-id", secondSearchPlan.id);
+  await page.locator("#plan-selection").selectOption(firstSearchPlan.id);
+  await expect(page.locator("#plan-list article")).toHaveAttribute("data-plan-id", firstSearchPlan.id);
+  await page.getByText("Technical plan identifiers & original evidence", { exact: true }).click();
+  expect(
+    JSON.parse((await page.locator("#plan-list article details pre").first().textContent()) ?? "null"),
+  ).toEqual(firstSearchPlan);
+  await page.getByText("Technical plan identifiers & original evidence", { exact: true }).click();
+  await expect(page.getByRole("button", { name: "Apply reviewed plan", exact: true })).toBeDisabled();
+  expect(reviewCalls.slice(browserHintCalls)).toEqual([]);
+  for (const [width, height, label] of [
+    [1440, 1080, "desktop"],
+    [390, 844, "mobile"],
+  ] as const) {
+    await page.setViewportSize({ width, height });
+    expect(await page.evaluate(() => document.documentElement.scrollWidth <= innerWidth)).toBe(true);
+    await page
+      .locator("#workspace")
+      .screenshot({ path: testInfo.outputPath(`browser-network-hint-${label}.png`) });
+  }
+  await page.context().setOffline(false);
+  expect(await page.evaluate(() => navigator.onLine)).toBe(true);
+  await expect(browserHint).toContainText("Browser reports online.");
+  await expect(browserHint).toContainText("Refresh explicitly");
+  expect(reviewCalls.slice(browserHintCalls)).toEqual([]);
+  const [hintRefreshed] = await Promise.all([
+    page.waitForResponse((response) => new URL(response.url()).pathname === "/api/v1/snapshot"),
+    page.getByRole("button", { name: "Refresh", exact: true }).click(),
+  ]);
+  expect(await hintRefreshed.json()).toEqual(browserHintBefore);
+  await expect(browserHint).toBeHidden();
+  await expect(page.locator("#notice")).toHaveText(
+    "Updated. Configuration observations are not connectivity measurements.",
+  );
+  await expect(page.locator("#plan-list article")).toHaveAttribute("data-plan-id", firstSearchPlan.id);
+  expect(reviewCalls.slice(browserHintCalls).map((url) => new URL(url).pathname)).toEqual([
+    "/api/v1/snapshot",
+  ]);
+  expect(await (await page.request.get("/api/v1/snapshot", { headers: readerHeaders })).json()).toEqual(
+    browserHintBefore,
+  );
 });
 
 test("read-only session cannot mutate through UI or API", async ({ page, request }) => {
