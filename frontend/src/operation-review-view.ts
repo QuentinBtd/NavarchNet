@@ -1,9 +1,11 @@
 import type { Operation, Plan } from "./generated";
+import { type OperationSearchState, operationHistorySearch } from "./operation-history-search";
 import { operationReviewHref } from "./operation-review-link";
 import { operationLabel, text } from "./view";
 
 type Options = {
   selectedOperationId?: string;
+  searchState?: OperationSearchState;
   isCurrent: () => boolean;
   onSelect: (id: string) => void;
   makeInspect: (operation: Operation) => HTMLButtonElement;
@@ -68,15 +70,27 @@ export function renderOperationReview(operations: Operation[], plans: Plan[], op
     select.append(option);
   }
   select.value = selectedId ?? "";
+  root.append(label, select);
+  const search = operationHistorySearch(
+    root,
+    select,
+    operations,
+    selectedId,
+    options.isCurrent,
+    options.searchState ?? { query: "" },
+  );
+  root.insertBefore(search.controls, label);
   select.onchange = () => {
     if (
       root.isConnected &&
+      select.parentElement === root &&
+      !select.disabled &&
       options.isCurrent() &&
+      search.canSelect(select.value) &&
       operations.some((operation) => operation.id === select.value)
     )
       options.onSelect(select.value);
   };
-  root.append(label, select);
   const matches = operations.filter((operation) => operation.id === selectedId);
   const operation = matches.length === 1 ? matches[0] : undefined;
   if (!operation) {

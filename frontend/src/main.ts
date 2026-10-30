@@ -56,6 +56,7 @@ let awsViewVersion = 0;
 let selectedPlanId: string | undefined;
 let planViewVersion = 0;
 let selectedOperationId: string | undefined;
+let operationSearch = { query: "" };
 let operationViewVersion = 0;
 let networkWorkspaceVersion = 0;
 let workspaceSelection: { networkId?: string; inventoryKey?: string } = {};
@@ -510,6 +511,7 @@ function renderOperations(operations: Operation[]) {
   element("operation-list").replaceChildren(
     renderOperationReview(operations, snapshot?.plans ?? [], {
       selectedOperationId,
+      searchState: operationSearch,
       isCurrent,
       onReviewPlan: (plan) => {
         if (!source || !isCurrent() || snapshot !== source || plan !== originalPlan) return;
@@ -828,6 +830,7 @@ function clearSession() {
   workspaceSelection = {};
   workspaceRequestedPlan = undefined;
   selectedOperationId = undefined;
+  operationSearch = { query: "" };
   ++operationViewVersion;
   clearOperationEvidence();
   selectedPlanId = undefined;

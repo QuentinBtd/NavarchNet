@@ -795,6 +795,69 @@ test("real browser: register, discover, plan, apply, observe drift and partial f
       .locator("#operations")
       .screenshot({ path: testInfo.outputPath(`operation-inspection-export-${label}.png`) });
   }
+
+  // Search only the returned history; all earlier download and nonmutation oracles remain unchanged.
+  const historySearchBefore = await (
+    await page.request.get("/api/v1/snapshot", { headers: readerHeaders })
+  ).json();
+  expect(historySearchBefore).toEqual(capturedExportBefore);
+  expect(historySearchBefore.operations.some((row: { id: string }) => row.id === linkedOperation.id)).toBe(
+    true,
+  );
+  const historySearchCalls = reviewCalls.length;
+  const historySearch = page.getByRole("searchbox", { name: "Search returned operations", exact: true });
+  await expect(historySearch).toBeVisible();
+  await historySearch.focus();
+  await page.keyboard.type(linkedOperation.id);
+  await expect(historySearch).toBeFocused();
+  await expect(historySearch).toHaveValue(linkedOperation.id);
+  expect(
+    await page
+      .locator("#operation-selection option")
+      .evaluateAll((options) => options.map((option) => (option as HTMLOptionElement).value)),
+  ).toEqual([linkedOperation.id]);
+  await expect(page.locator("#operation-list article")).toHaveAttribute(
+    "data-operation-id",
+    otherInspectionOperation.id,
+  );
+  await expect(page.locator('#operation-list [role="status"]')).toContainText(
+    "Selected operation is outside search results; its detail is unchanged.",
+  );
+  await expect(downloadInspection).toBeVisible();
+  await expect(page.locator("#operation-events")).toHaveText(JSON.stringify(otherInspectionEvents, null, 2));
+  for (const [width, height, label] of [
+    [1440, 1080, "desktop"],
+    [390, 844, "mobile"],
+  ] as const) {
+    await page.setViewportSize({ width, height });
+    expect(await page.evaluate(() => document.documentElement.scrollWidth <= innerWidth)).toBe(true);
+    await page
+      .locator("#operations")
+      .screenshot({ path: testInfo.outputPath(`operation-history-search-${label}.png`) });
+  }
+  await page.locator("#operation-selection").selectOption(linkedOperation.id);
+  await expect(page.locator("#operation-list article")).toHaveAttribute(
+    "data-operation-id",
+    linkedOperation.id,
+  );
+  await expect(historySearch).toHaveValue(linkedOperation.id);
+  await expect(downloadInspection).toHaveCount(0);
+  await historySearch.fill("");
+  await expect(historySearch).toBeFocused();
+  await expect(historySearch).toHaveValue("");
+  expect(
+    await page
+      .locator("#operation-selection option")
+      .evaluateAll((options) => options.map((option) => (option as HTMLOptionElement).value)),
+  ).toEqual(historySearchBefore.operations.map((row: { id: string }) => row.id));
+  await expect(page.locator("#operation-list article")).toHaveAttribute(
+    "data-operation-id",
+    linkedOperation.id,
+  );
+  expect(reviewCalls.slice(historySearchCalls)).toEqual([]);
+  expect(await (await page.request.get("/api/v1/snapshot", { headers: readerHeaders })).json()).toEqual(
+    historySearchBefore,
+  );
 });
 
 test("read-only session cannot mutate through UI or API", async ({ page, request }) => {
