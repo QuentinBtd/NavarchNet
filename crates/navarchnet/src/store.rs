@@ -203,6 +203,7 @@ impl Store {
             .fetch_one(&mut *tx)
             .await?;
         verify_connection_intent(&mut tx, &scope, &request).await?;
+        let network = with_admitted_peer_cidrs(&mut tx, network, &scope).await?;
         let actions = crate::domain::plan(&inventory, &network, &request)?;
         let mut plan = Plan {
             id: id(),
@@ -279,13 +280,7 @@ impl Store {
                 && network.revision == plan.network_revision,
             "Stale plan: discovery or policy changed"
         );
-        let occupied: Vec<Value> = sqlx::query_scalar("SELECT DISTINCT i.body FROM operations o JOIN plans p ON p.id=o.plan_id JOIN inventory i ON i.account_id=p.body->'request'->>'account_id' WHERE p.body->'request'->>'network_id'=$1 AND o.scope<>$2 AND o.status NOT IN ('failed')").bind(&network.id).bind(&plan.scope).fetch_all(&mut *tx).await?;
-        let mut checked_network = network;
-        for body in occupied {
-            checked_network
-                .application_cidrs
-                .push(decode::<Inventory>(body)?.cidr);
-        }
+        let checked_network = with_admitted_peer_cidrs(&mut tx, network, &plan.scope).await?;
         crate::domain::plan(&inventory, &checked_network, &plan.request)?;
         sqlx::query("INSERT INTO desired_connections(scope,request,plan_id) VALUES ($1,$2,$3) ON CONFLICT(scope) DO NOTHING")
             .bind(&plan.scope).bind(encode(&plan.request)?).bind(&plan.id).execute(&mut *tx).await?;
@@ -373,6 +368,20 @@ impl Store {
         .await?;
         Ok(())
     }
+}
+
+async fn with_admitted_peer_cidrs(
+    tx: &mut sqlx::Transaction<'_, sqlx::Postgres>,
+    mut network: RegionalNetwork,
+    scope: &str,
+) -> anyhow::Result<RegionalNetwork> {
+    let occupied: Vec<Value> = sqlx::query_scalar("SELECT DISTINCT i.body FROM operations o JOIN plans p ON p.id=o.plan_id JOIN inventory i ON i.account_id=p.body->'request'->>'account_id' WHERE p.body->'request'->>'network_id'=$1 AND o.scope<>$2 AND o.status NOT IN ('failed')").bind(&network.id).bind(scope).fetch_all(&mut **tx).await?;
+    for body in occupied {
+        network
+            .application_cidrs
+            .push(decode::<Inventory>(body)?.cidr);
+    }
+    Ok(network)
 }
 
 async fn verify_connection_intent(

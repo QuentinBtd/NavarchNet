@@ -437,3 +437,162 @@ async fn shared_managed_table_plan_persists_one_default_effect_and_all_original_
     assert_eq!(original_inventory, stored_inventory);
     Ok(())
 }
+
+#[tokio::test]
+async fn new_plans_refuse_admitted_peer_overlap_before_persisting_and_apply_still_rechecks()
+-> anyhow::Result<()> {
+    let store = isolated().await?;
+    let first_request = setup(&store).await?;
+    let second_account = store
+        .register(
+            "admin",
+            "Overlapping application",
+            ProviderKind::Fake,
+            "fake:role",
+        )
+        .await?;
+    let second_inventory = store.discover("admin", &second_account.id).await?;
+    let second_request = ConnectionRequest {
+        account_id: second_account.id,
+        vpc_id: second_inventory.vpc_id,
+        subnet_ids: second_inventory.subnets.into_iter().map(|s| s.id).collect(),
+        network_id: first_request.network_id.clone(),
+        allow_application_traffic: false,
+    };
+    // Construct valid overlapping simulation inventory before either immutable Plan exists.
+    for (account, cidr) in [
+        (&first_request.account_id, "10.90.0.0/24"),
+        (&second_request.account_id, "10.90.0.0/25"),
+    ] {
+        let body: serde_json::Value =
+            sqlx::query_scalar("SELECT body FROM inventory WHERE account_id=$1")
+                .bind(account)
+                .fetch_one(&store.pool)
+                .await?;
+        let mut inventory: Inventory = serde_json::from_value(body)?;
+        inventory.cidr = cidr.into();
+        assert_eq!(
+            sqlx::query("UPDATE inventory SET body=$1 WHERE account_id=$2")
+                .bind(serde_json::to_value(inventory)?)
+                .bind(account)
+                .execute(&store.pool)
+                .await?
+                .rows_affected(),
+            1
+        );
+    }
+    let first_plan = store.create_plan("admin", first_request.clone()).await?;
+    let earlier_second_plan = store.create_plan("admin", second_request.clone()).await?;
+    let original_first = serde_json::to_value(&first_plan)?;
+    let original_second = serde_json::to_value(&earlier_second_plan)?;
+    let first_operation = store.apply("admin", &first_plan.id, Fault::None).await?;
+    assert_eq!(first_operation.status, "queued");
+    let fingerprint = || async {
+        sqlx::query_scalar::<_, serde_json::Value>("SELECT jsonb_build_object('accounts',(SELECT jsonb_agg(to_jsonb(a) ORDER BY id) FROM accounts a),'networks',(SELECT jsonb_agg(to_jsonb(n) ORDER BY id) FROM networks n),'inventory',(SELECT jsonb_agg(to_jsonb(i) ORDER BY account_id) FROM inventory i),'plans',(SELECT jsonb_agg(to_jsonb(p) ORDER BY id) FROM plans p),'scopes',(SELECT jsonb_agg(to_jsonb(s) ORDER BY id) FROM scopes s),'connections',(SELECT jsonb_agg(to_jsonb(c) ORDER BY scope) FROM desired_connections c),'operations',(SELECT jsonb_agg(to_jsonb(o) ORDER BY id) FROM operations o),'events',(SELECT jsonb_agg(to_jsonb(e) ORDER BY id) FROM step_events e),'effects',(SELECT jsonb_agg(to_jsonb(f) ORDER BY scope,action_key) FROM fake_effects f),'audit',(SELECT jsonb_agg(to_jsonb(a) ORDER BY id) FROM audit a))").fetch_one(&store.pool).await
+    };
+    let queued_before = fingerprint().await?;
+    let error = store
+        .create_plan("admin", second_request.clone())
+        .await
+        .expect_err("A newly generated plan must refuse currently admitted peer CIDR overlap");
+    assert!(error.to_string().contains("Overlapping CIDRs"), "{error}");
+    assert_eq!(
+        queued_before,
+        fingerprint().await?,
+        "Rejected generation must persist no Plan, scope, audit or other changes"
+    );
+    let error = store
+        .apply("admin", &earlier_second_plan.id, Fault::None)
+        .await
+        .expect_err("A Plan generated before a peer was admitted must still be refused at apply");
+    assert!(error.to_string().contains("Overlapping CIDRs"), "{error}");
+    assert_eq!(queued_before, fingerprint().await?);
+    finish(&store).await?;
+    assert_eq!(
+        store.operation(&first_operation.id).await?.status,
+        "succeeded"
+    );
+    let settled_before = fingerprint().await?;
+    assert!(
+        store
+            .create_plan("admin", second_request.clone())
+            .await
+            .unwrap_err()
+            .to_string()
+            .contains("Overlapping CIDRs")
+    );
+    assert_eq!(settled_before, fingerprint().await?);
+    let own_scope = store.create_plan("admin", first_request).await?;
+    assert_eq!(
+        serde_json::to_value(&own_scope.actions)?,
+        serde_json::to_value(&first_plan.actions)?
+    );
+    let separate_network = store
+        .create_demo_network("admin", "Independent regional network")
+        .await?;
+    let separate_plan = store
+        .create_plan(
+            "admin",
+            ConnectionRequest {
+                network_id: separate_network.id,
+                ..second_request
+            },
+        )
+        .await?;
+    assert_eq!(
+        separate_plan.request.account_id,
+        earlier_second_plan.request.account_id
+    );
+    let third = store
+        .register(
+            "admin",
+            "Disjoint application",
+            ProviderKind::Fake,
+            "fake:role",
+        )
+        .await?;
+    let mut third_inventory = store.discover("admin", &third.id).await?;
+    third_inventory.cidr = "10.91.0.0/24".into();
+    sqlx::query("UPDATE inventory SET body=$1 WHERE account_id=$2")
+        .bind(serde_json::to_value(&third_inventory)?)
+        .bind(&third.id)
+        .execute(&store.pool)
+        .await?;
+    let disjoint = store
+        .create_plan(
+            "admin",
+            ConnectionRequest {
+                account_id: third.id,
+                vpc_id: third_inventory.vpc_id,
+                subnet_ids: third_inventory.subnets.into_iter().map(|s| s.id).collect(),
+                network_id: first_plan.request.network_id.clone(),
+                allow_application_traffic: false,
+            },
+        )
+        .await?;
+    let disjoint_json = serde_json::to_value(&disjoint)?;
+    let applied = store.apply("admin", &disjoint.id, Fault::None).await?;
+    finish(&store).await?;
+    assert_eq!(store.operation(&applied.id).await?.status, "succeeded");
+    assert_eq!(
+        store.apply("admin", &disjoint.id, Fault::None).await?.id,
+        applied.id
+    );
+    let observed = store.observe(&applied.id).await?;
+    assert_eq!(observed.configuration, "simulated_converged");
+    assert!(!observed.drift);
+    assert!(observed.active_probe.contains("Not tested"));
+    assert_eq!(
+        original_first,
+        serde_json::to_value(store.plan(&first_plan.id).await?)?
+    );
+    assert_eq!(
+        original_second,
+        serde_json::to_value(store.plan(&earlier_second_plan.id).await?)?
+    );
+    assert_eq!(
+        disjoint_json,
+        serde_json::to_value(store.plan(&disjoint.id).await?)?
+    );
+    Ok(())
+}
