@@ -112,3 +112,106 @@ proptest! {
         prop_assert!(actions[..activation].iter().any(|a| a.kind == ActionKind::ReturnRoute));
     }
 }
+
+#[test]
+fn shared_managed_route_table_has_one_default_action_after_all_selected_az_prerequisites() {
+    let (mut inventory, network, request) = fixture();
+    let shared = inventory.subnets[0].route_table.clone();
+    inventory.subnets[1].route_table = shared.clone();
+    let original = serde_json::to_value((&inventory, &network, &request)).unwrap();
+    let actions = plan(&inventory, &network, &request).unwrap();
+    let defaults: Vec<_> = actions
+        .iter()
+        .filter(|action| action.kind == ActionKind::SpokeDefaultRoute)
+        .collect();
+    assert_eq!(
+        defaults.len(),
+        1,
+        "One shared managed table must produce one resource action, not one per selected subnet"
+    );
+    assert_eq!(defaults[0].target, shared);
+    assert_eq!(defaults[0].requires, vec![0, 1, 2, 3, 4]);
+    assert_eq!(actions.len(), 6);
+    assert_eq!(actions[0].kind, ActionKind::Attachment);
+    assert_eq!(actions[1].kind, ActionKind::Isolation);
+    assert_eq!(actions[2].kind, ActionKind::ReturnRoute);
+    assert_eq!(actions[3].kind, ActionKind::NatRoute);
+    assert_eq!(actions[3].target, inventory.subnets[0].az_id);
+    assert_eq!(actions[4].kind, ActionKind::NatRoute);
+    assert_eq!(actions[4].target, inventory.subnets[1].az_id);
+    assert_eq!(
+        original,
+        serde_json::to_value((&inventory, &network, &request)).unwrap()
+    );
+    let mut reordered = inventory.clone();
+    reordered.subnets.reverse();
+    let mut reversed_request = request.clone();
+    reversed_request.subnet_ids.reverse();
+    assert_eq!(
+        serde_json::to_value(&actions).unwrap(),
+        serde_json::to_value(plan(&reordered, &network, &reversed_request).unwrap()).unwrap()
+    );
+}
+
+#[test]
+fn shared_table_dedup_keeps_canonical_action_order_and_validates_every_selected_subnet() {
+    let (mut inventory, mut network, mut request) = fixture();
+    inventory.subnets[0].route_table = "rtb-z".into();
+    inventory.subnets[1].route_table = "rtb-a".into();
+    let mut third = inventory.subnets[0].clone();
+    third.id = "subnet-c".into();
+    third.az_id = "euw1-az3".into();
+    request.subnet_ids.push(third.id.clone());
+    network.az_ids.push(third.az_id.clone());
+    inventory.subnets.push(third);
+    let actions = plan(&inventory, &network, &request).unwrap();
+    let defaults: Vec<_> = actions
+        .iter()
+        .filter(|action| action.kind == ActionKind::SpokeDefaultRoute)
+        .collect();
+    assert_eq!(
+        defaults
+            .iter()
+            .map(|action| action.target.as_str())
+            .collect::<Vec<_>>(),
+        vec!["rtb-z", "rtb-a"]
+    );
+    assert!(
+        defaults
+            .iter()
+            .all(|action| action.requires == vec![0, 1, 2, 3, 4, 5])
+    );
+    assert_eq!(
+        actions
+            .iter()
+            .filter(|action| action.kind == ActionKind::NatRoute)
+            .count(),
+        3
+    );
+    let expected = serde_json::to_value(&actions).unwrap();
+    inventory.subnets.reverse();
+    request.subnet_ids.reverse();
+    assert_eq!(
+        expected,
+        serde_json::to_value(plan(&inventory, &network, &request).unwrap()).unwrap()
+    );
+
+    for unmanaged in [0, 1] {
+        let (mut inventory, network, request) = fixture();
+        inventory.subnets[1].route_table = inventory.subnets[0].route_table.clone();
+        inventory.subnets[unmanaged].default_route_managed = false;
+        let before = serde_json::to_value(&inventory).unwrap();
+        let error = plan(&inventory, &network, &request).unwrap_err();
+        assert!(error.to_string().contains("adoption required"), "{error}");
+        assert_eq!(before, serde_json::to_value(&inventory).unwrap());
+    }
+    let (mut inventory, network, request) = fixture();
+    inventory.subnets[1].route_table = inventory.subnets[0].route_table.clone();
+    inventory.subnets[1].az_id = inventory.subnets[0].az_id.clone();
+    assert!(
+        plan(&inventory, &network, &request)
+            .unwrap_err()
+            .to_string()
+            .contains("one attachment subnet per AZ")
+    );
+}

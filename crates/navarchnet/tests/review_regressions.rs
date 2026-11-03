@@ -324,3 +324,116 @@ async fn provider_fault_classes_have_bounded_and_visible_outcomes() -> anyhow::R
     assert!(store.claim().await?.is_none());
     Ok(())
 }
+
+#[tokio::test]
+async fn shared_managed_table_plan_persists_one_default_effect_and_all_original_subnets()
+-> anyhow::Result<()> {
+    let store = isolated().await?;
+    let request = setup(&store).await?;
+    let body: serde_json::Value =
+        sqlx::query_scalar("SELECT body FROM inventory WHERE account_id=$1")
+            .bind(&request.account_id)
+            .fetch_one(&store.pool)
+            .await?;
+    let mut inventory: Inventory = serde_json::from_value(body)?;
+    // Construct valid shared-table simulation input before planning; no live AWS discovery claim.
+    for subnet in &mut inventory.subnets {
+        subnet.route_table = "rtb-shared-simulation".into();
+    }
+    let original_inventory = serde_json::to_value(&inventory)?;
+    sqlx::query("UPDATE inventory SET body=$1 WHERE account_id=$2")
+        .bind(&original_inventory)
+        .bind(&request.account_id)
+        .execute(&store.pool)
+        .await?;
+    let plan = store.create_plan("admin", request.clone()).await?;
+    assert_eq!(
+        serde_json::to_value(&plan.request)?,
+        serde_json::to_value(&request)?
+    );
+    assert_eq!(plan.request.subnet_ids.len(), 2);
+    assert_eq!(plan.actions.len(), 6);
+    assert_eq!(
+        plan.actions
+            .iter()
+            .filter(|action| action.kind == ActionKind::SpokeDefaultRoute)
+            .count(),
+        1
+    );
+    assert_eq!(
+        plan.actions
+            .iter()
+            .filter(|action| action.kind == ActionKind::NatRoute)
+            .count(),
+        2
+    );
+    let original_plan = serde_json::to_value(&plan)?;
+    let operation = store.apply("admin", &plan.id, Fault::None).await?;
+    finish(&store).await?;
+    let completed = store.operation(&operation.id).await?;
+    assert_eq!(completed.status, "succeeded");
+    assert_eq!(completed.step as usize, plan.actions.len());
+    let steps: Vec<i32> =
+        sqlx::query_scalar("SELECT step FROM step_events WHERE operation_id=$1 ORDER BY id")
+            .bind(&operation.id)
+            .fetch_all(&store.pool)
+            .await?;
+    assert_eq!(steps, (0..plan.actions.len() as i32).collect::<Vec<_>>());
+    let keys: Vec<String> = sqlx::query_scalar(
+        "SELECT action_key FROM fake_effects WHERE scope=$1 ORDER BY action_key",
+    )
+    .bind(&plan.scope)
+    .fetch_all(&store.pool)
+    .await?;
+    let mut expected_keys: Vec<_> = plan
+        .actions
+        .iter()
+        .map(|action| format!("{:?}:{}", action.kind, action.target))
+        .collect();
+    expected_keys.sort();
+    assert_eq!(keys, expected_keys);
+    let observation = store.observe(&operation.id).await?;
+    assert!(!observation.drift);
+    assert_eq!(observation.configuration, "simulated_converged");
+    assert!(observation.active_probe.contains("Not tested"));
+    let same = store.apply("admin", &plan.id, Fault::None).await?;
+    assert_eq!(same.id, operation.id);
+
+    let effects_before: serde_json::Value = sqlx::query_scalar(
+        "SELECT jsonb_agg(to_jsonb(f) ORDER BY action_key) FROM fake_effects f WHERE scope=$1",
+    )
+    .bind(&plan.scope)
+    .fetch_one(&store.pool)
+    .await?;
+    let repeated_plan = store.create_plan("admin", request).await?;
+    assert_ne!(repeated_plan.id, plan.id);
+    assert_eq!(
+        serde_json::to_value(&repeated_plan.actions)?,
+        serde_json::to_value(&plan.actions)?
+    );
+    let repeated = store.apply("admin", &repeated_plan.id, Fault::None).await?;
+    finish(&store).await?;
+    assert_eq!(store.operation(&repeated.id).await?.status, "succeeded");
+    let effects_after: serde_json::Value = sqlx::query_scalar(
+        "SELECT jsonb_agg(to_jsonb(f) ORDER BY action_key) FROM fake_effects f WHERE scope=$1",
+    )
+    .bind(&plan.scope)
+    .fetch_one(&store.pool)
+    .await?;
+    assert_eq!(
+        effects_before, effects_after,
+        "Reapplying identical canonical resource actions must not rewrite existing effects"
+    );
+    assert!(!store.observe(&repeated.id).await?.drift);
+    assert_eq!(
+        original_plan,
+        serde_json::to_value(store.plan(&plan.id).await?)?
+    );
+    let stored_inventory: serde_json::Value =
+        sqlx::query_scalar("SELECT body FROM inventory WHERE account_id=$1")
+            .bind(&inventory.account_id)
+            .fetch_one(&store.pool)
+            .await?;
+    assert_eq!(original_inventory, stored_inventory);
+    Ok(())
+}

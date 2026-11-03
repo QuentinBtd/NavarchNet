@@ -249,7 +249,11 @@ pub fn plan(
         });
     }
     let prerequisites = (0..actions.len() as u32).collect::<Vec<_>>();
+    let mut default_tables = HashSet::new();
     for subnet in selected {
+        if !default_tables.insert(&subnet.route_table) {
+            continue;
+        }
         actions.push(Action {
             kind: ActionKind::SpokeDefaultRoute,
             target: subnet.route_table.clone(),

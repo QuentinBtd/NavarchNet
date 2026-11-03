@@ -2,7 +2,15 @@
 
 NavarchNet has an implemented fake-provider journey and a locally exercised AWS read-only account/topology slice, not a completed AWS V1 orchestrator. No live AWS API call/resource mutation, release/tag publication, crates.io upload or GHCR upload has occurred.
 
-## Current continuation — saved subnet to original captured table and back
+## Current continuation — one planned default-route action per shared managed table
+
+The credential-free core planner now emits one `SpokeDefaultRoute` action per distinct selected managed table, even when several selected subnets reference that table. It retains every original requested subnet and each selected AZ's NAT prerequisite, validates every selected subnet before deduplication, and preserves the existing canonical first-subnet action order. This changes newly generated action lists, not stored historical Plans, API shapes, execution permissions or AWS support. Identical table references are a resource-identity contract in the simulation model, not proof of ownership, health or connectivity.
+
+A genuine core RED executes the original planner with two selected subnets sharing one managed table and gets two default actions instead of one. Four added production lines make the complete seven-case domain suite pass. Supplementary order/ownership/AZ cases and a real isolated-PostgreSQL tracer qualify persisted Plan/request preservation, six exact actions/events/effect keys, application, observation and idempotent reapplication without rewriting existing effects. The stored shared-table fixture is constructed simulation input, not live AWS discovery or a malformed public HTTP response. One exact-source composed full gate passes 193 Rust cases, 304 frontend cases/35 files, 20 Node cases (four workflow and sixteen artifact/driver contracts), and eighteen real browser functions, plus formatting/Clippy/contracts/build/real HTTP crash smoke/audits. Complete tested source is retained before only two Markdown notes. The newly built server is retained under its own hash; prior 2ee runtime, seed, dist and original databases are preserved. Frontend code and all earlier test bodies remain unchanged. Independent source-bound acceptance and normal installed-hook/draft-PR publication remain separate gates; this is not complete AWS orchestration, production or final human UX acceptance.
+
+## Delivered checkpoint — saved subnet to original captured table and back
+
+Commit `267c5ce78235653816337c68197c8551cf70e596` delivered this checkpoint after corrected independent acceptance, normal installed fast/full hooks and exact source/tree/runtime/assets/open-draft-PR readbacks. Pending wording below is capture-time history, not a current blocker.
 
 The saved subnet inspector now explicitly opens its calculated selected VPC table's original record within the same captured map, including reported routes and complete original JSON. Return restores the exact source subnet, kind, literal filter and batch rather than choosing another record. Targets beyond the initial 24 records get a bounded containing batch with earlier/continued browsing. Manual kind/search/record browsing retires the source-return intent. This is local saved-evidence navigation, not a destination decision, usable path, ownership, health or measured connectivity claim.
 
