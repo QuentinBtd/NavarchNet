@@ -146,6 +146,20 @@ const isAdmin = () => snapshot?.role === "admin";
 async function request<T>(path: string, body?: unknown): Promise<T> {
   return session.request<T>(path, body);
 }
+async function refreshAfterAcknowledged(kind: "plan" | "operation", id: string) {
+  try {
+    await refresh();
+  } catch (error) {
+    const acknowledged =
+      kind === "plan"
+        ? `Plan ${id} was created. No Apply was requested by this generation.`
+        : `Apply acknowledged operation ${id}; it may continue independently. Do not infer rollback from this read failure.`;
+    const cause = error instanceof Error ? error.message : "Request failed";
+    throw new Error(
+      `${acknowledged} Saved history could not be refreshed. Refresh explicitly and select this ${kind} in history. ${cause}`,
+    );
+  }
+}
 async function run(action: () => Promise<void>, isCurrent = () => true) {
   const version = session.version;
   element("notice").textContent = "Working…";
@@ -482,7 +496,7 @@ function renderPlans(plans: Plan[]) {
           const body: ApplyPlan = { fault: element<HTMLSelectElement>("fault").value as Fault };
           const operation = await request<Operation>(`/plans/${plan.id}/apply`, body);
           if (generation !== session.version || snapshot !== source || !isCurrent()) return;
-          await refresh();
+          await refreshAfterAcknowledged("operation", operation.id);
           // The followup retires this draw once; an intervening refresh retires it again.
           if (generation !== session.version || planViewVersion !== version + 1) return;
           selectedOperationId = operation.id;
@@ -1028,7 +1042,7 @@ element<HTMLFormElement>("plan-form").onsubmit = (event) => {
         const plan = await request<Plan>("/plans", body);
         if (version !== session.version || snapshot !== source) return;
         const viewVersion = planViewVersion;
-        await refresh();
+        await refreshAfterAcknowledged("plan", plan.id);
         if (version !== session.version || planViewVersion !== viewVersion + 1) return;
         selectedPlanId = plan.id;
         renderPlans(snapshot?.plans ?? []);

@@ -725,4 +725,167 @@ test("real API simulation inventory has a scoped network map and read-only inspe
   expect(operationAfter.plans.find((p) => p.id === subsetPlan.id)).toEqual(subsetPlan);
   expect(operationAfter.operations.find((o) => o.id === admittedOperation.id)?.plan_id).toBe(admittedPlan.id);
   expect(writes).toHaveLength(writesBeforeAdmission + 2);
+
+  // Keep all prior oracles; only the acknowledged write's following browser read fails.
+  // Test-harness API reads wait for existing simulation work, not application polling.
+  await expect
+    .poll(async () => {
+      const saved = (await (await request.get("/api/v1/snapshot", { headers })).json()) as Snapshot;
+      return saved.operations.find((o) => o.id === admittedOperation.id)?.status;
+    })
+    .toBe("succeeded");
+  await page
+    .getByRole("navigation", { name: "Workspace" })
+    .getByRole("link", { name: "Connections / plans", exact: true })
+    .click();
+  await expect(page.locator("#connect")).toBeVisible();
+  await page.getByRole("link", { name: "Review existing change plans", exact: true }).click();
+  await expect(page.locator("#plans")).toBeVisible();
+  await page.locator("#plan-selection").selectOption(admittedPlan.id);
+  await page
+    .getByRole("button", { name: "Configure another plan from original request", exact: true })
+    .click();
+  await expect(page.locator("#connection-configure")).toBeVisible();
+  const ackRecoveryBefore = (await (await request.get("/api/v1/snapshot", { headers })).json()) as Snapshot;
+  const ackRecoveryWrites = writes.length;
+  await page.route("**/api/v1/snapshot", (route) => route.abort("failed"), { times: 1 });
+  const ackRecoveryPost = page.waitForResponse(
+    (r) => r.request().method() === "POST" && new URL(r.url()).pathname === "/api/v1/plans",
+  );
+  const ackRecoveryReadFailure = page.waitForEvent(
+    "requestfailed",
+    (r) => new URL(r.url()).pathname === "/api/v1/snapshot",
+  );
+  await page.getByRole("button", { name: "Generate immutable change plan", exact: true }).click();
+  const ackRecoveryResponse = await ackRecoveryPost;
+  expect(ackRecoveryResponse.status()).toBe(200);
+  const ackRecoveryPlan = (await ackRecoveryResponse.json()) as Snapshot["plans"][number];
+  expect(ackRecoveryResponse.request().postDataJSON()).toEqual(admittedPlan.request);
+  expect(ackRecoveryPlan.request).toEqual(admittedPlan.request);
+  await ackRecoveryReadFailure;
+  await expect(page.locator("#notice")).toContainText(`Plan ${ackRecoveryPlan.id} was created`);
+  await expect(page.locator("#notice")).toContainText("Refresh explicitly");
+  await expect(page.locator("#notice")).toContainText("No Apply");
+  await expect(page.locator("#connect")).toBeVisible();
+  await expect(
+    page.getByRole("button", { name: "Generate immutable change plan", exact: true }),
+  ).toBeEnabled();
+  const ackRecoverySaved = (await (await request.get("/api/v1/snapshot", { headers })).json()) as Snapshot;
+  expect(ackRecoverySaved.plans).toHaveLength(ackRecoveryBefore.plans.length + 1);
+  expect(ackRecoverySaved.plans).toContainEqual(ackRecoveryPlan);
+  expect(ackRecoverySaved.operations).toEqual(ackRecoveryBefore.operations);
+  for (const original of ackRecoveryBefore.plans)
+    expect(ackRecoverySaved.plans.find((p) => p.id === original.id)).toEqual(original);
+  const ackRecoveryCalls = localCalls.length;
+  for (const [width, height, label] of [
+    [1440, 1000, "desktop"],
+    [390, 844, "mobile"],
+  ] as const) {
+    await page.setViewportSize({ width, height });
+    expect(await page.evaluate(() => document.documentElement.scrollWidth <= innerWidth)).toBe(true);
+    await page.screenshot({
+      path: testInfo.outputPath(`acknowledged-plan-read-failure-${label}.png`),
+      fullPage: true,
+    });
+  }
+  expect(writes).toHaveLength(ackRecoveryWrites + 1);
+  expect(localCalls).toHaveLength(ackRecoveryCalls);
+  const ackRecoveryRefresh = page.waitForResponse(
+    (r) => r.request().method() === "GET" && new URL(r.url()).pathname === "/api/v1/snapshot",
+  );
+  await page.locator("#refresh").click();
+  await (await ackRecoveryRefresh).json();
+  await expect(page.locator("#notice")).toContainText("Updated.");
+  await expect(page.locator("#plan-list article")).toHaveAttribute("data-plan-id", admittedPlan.id);
+  await page.getByRole("link", { name: "Review existing change plans", exact: true }).click();
+  await expect(page.locator("#plans")).toBeVisible();
+  await page.locator("#plan-selection").selectOption(ackRecoveryPlan.id);
+  await page.getByText("Technical plan identifiers & original evidence", { exact: true }).click();
+  expect(JSON.parse(await page.locator("#plan-list article details pre").innerText())).toEqual(
+    ackRecoveryPlan,
+  );
+  expect(writes).toHaveLength(ackRecoveryWrites + 1);
+
+  await page.route("**/api/v1/snapshot", (route) => route.abort("failed"), { times: 1 });
+  const ackRecoveryApply = page.waitForResponse(
+    (r) =>
+      r.request().method() === "POST" &&
+      new URL(r.url()).pathname === `/api/v1/plans/${ackRecoveryPlan.id}/apply`,
+  );
+  const ackRecoveryApplyReadFailure = page.waitForEvent(
+    "requestfailed",
+    (r) => new URL(r.url()).pathname === "/api/v1/snapshot",
+  );
+  await page.getByRole("button", { name: "Apply reviewed plan", exact: true }).click();
+  const ackRecoveryApplyResponse = await ackRecoveryApply;
+  expect(ackRecoveryApplyResponse.status()).toBe(200);
+  const ackRecoveryOperation = (await ackRecoveryApplyResponse.json()) as Snapshot["operations"][number];
+  expect(ackRecoveryOperation.plan_id).toBe(ackRecoveryPlan.id);
+  await ackRecoveryApplyReadFailure;
+  await expect(page.locator("#notice")).toContainText(
+    `Apply acknowledged operation ${ackRecoveryOperation.id}`,
+  );
+  await expect(page.locator("#notice")).toContainText("may continue independently");
+  await expect(page.locator("#notice")).toContainText("Do not infer rollback");
+  await expect(page.locator("#plans")).toBeVisible();
+  await expect(page.locator("#operation-list article")).toHaveAttribute(
+    "data-operation-id",
+    admittedOperation.id,
+  );
+  const ackRecoveryApplySaved = (await (
+    await request.get("/api/v1/snapshot", { headers })
+  ).json()) as Snapshot;
+  expect(ackRecoveryApplySaved.operations).toHaveLength(ackRecoverySaved.operations.length + 1);
+  expect(ackRecoveryApplySaved.operations.find((o) => o.id === ackRecoveryOperation.id)?.plan_id).toBe(
+    ackRecoveryPlan.id,
+  );
+  expect(ackRecoveryApplySaved.plans).toEqual(ackRecoverySaved.plans);
+  const ackRecoveryApplyCalls = localCalls.length;
+  for (const [width, height, label] of [
+    [1440, 1000, "desktop"],
+    [390, 844, "mobile"],
+  ] as const) {
+    await page.setViewportSize({ width, height });
+    expect(await page.evaluate(() => document.documentElement.scrollWidth <= innerWidth)).toBe(true);
+    await page.screenshot({
+      path: testInfo.outputPath(`acknowledged-operation-read-failure-${label}.png`),
+      fullPage: true,
+    });
+  }
+  expect(writes).toHaveLength(ackRecoveryWrites + 2);
+  expect(localCalls).toHaveLength(ackRecoveryApplyCalls);
+  await expect
+    .poll(async () => {
+      const saved = (await (await request.get("/api/v1/snapshot", { headers })).json()) as Snapshot;
+      return saved.operations.find((o) => o.id === ackRecoveryOperation.id)?.status;
+    })
+    .toBe("succeeded");
+  const ackRecoveryFinalRead = page.waitForResponse(
+    (r) => r.request().method() === "GET" && new URL(r.url()).pathname === "/api/v1/snapshot",
+  );
+  await page.locator("#refresh").click();
+  const ackRecoveryFinalSnapshot = (await (await ackRecoveryFinalRead).json()) as Snapshot;
+  await expect(page.locator("#notice")).toContainText("Updated.");
+  await expect(page.locator("#operation-list article")).toHaveAttribute(
+    "data-operation-id",
+    admittedOperation.id,
+  );
+  await page
+    .getByRole("navigation", { name: "Workspace" })
+    .getByRole("link", { name: "Operations", exact: true })
+    .click();
+  await expect(page.locator("#operations")).toBeVisible();
+  const ackRecoverySelectionCalls = localCalls.length;
+  await page.locator("#operation-selection").selectOption(ackRecoveryOperation.id);
+  await expect(page.locator("#operation-list article")).toHaveAttribute(
+    "data-operation-id",
+    ackRecoveryOperation.id,
+  );
+  await page.getByText("Technical operation identifiers & persisted state", { exact: true }).click();
+  expect(JSON.parse(await page.locator("#operation-list article details pre").innerText())).toEqual(
+    ackRecoveryFinalSnapshot.operations.find((o) => o.id === ackRecoveryOperation.id),
+  );
+  expect(localCalls).toHaveLength(ackRecoverySelectionCalls);
+  expect(writes).toHaveLength(ackRecoveryWrites + 2);
+  expect(await (await request.get("/api/v1/snapshot", { headers })).json()).toEqual(ackRecoveryFinalSnapshot);
 });
