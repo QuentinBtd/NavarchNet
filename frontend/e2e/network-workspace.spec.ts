@@ -618,4 +618,111 @@ test("real API simulation inventory has a scoped network map and read-only inspe
       .locator("#network-list")
       .screenshot({ path: testInfo.outputPath(`plan-map-requested-subnets-${label}.png`) });
   }
+
+  // All previous original-request/map/reader/nonmutation assertions remain unchanged.
+  await page.locator("#logout").click();
+  await page
+    .getByLabel("Demo token or OIDC access token")
+    .fill("browser-test-admin-credential-free-local-only");
+  await page.getByRole("button", { name: "Connect", exact: true }).click();
+  await page
+    .getByRole("navigation", { name: "Workspace" })
+    .getByRole("link", { name: "Connections / plans", exact: true })
+    .click();
+  await expect(page.locator("#connect")).toBeVisible();
+  await page.getByRole("link", { name: "Review existing change plans", exact: true }).click();
+  await expect(page.locator("#plans")).toBeVisible();
+  await page.locator("#plan-selection").selectOption(subsetPlan.id);
+  const admissionBefore = (await (await request.get("/api/v1/snapshot", { headers })).json()) as Snapshot;
+  const beforePrepareCalls = localCalls.length;
+  await page
+    .getByRole("button", { name: "Configure another plan from original request", exact: true })
+    .click();
+  await expect(page.locator("#connection-configure")).toBeVisible();
+  expect(localCalls).toHaveLength(beforePrepareCalls);
+  expect(await (await request.get("/api/v1/snapshot", { headers })).json()).toEqual(admissionBefore);
+  let release!: () => void;
+  const gate = new Promise<void>((done) => {
+    release = done;
+  });
+  let admitted = 0;
+  await page.route("**/api/v1/plans", async (route) => {
+    if (route.request().method() !== "POST") {
+      await route.continue();
+      return;
+    }
+    admitted++;
+    await gate;
+    await route.continue();
+  });
+  const generatedResponse = page.waitForResponse(
+    (r) => r.request().method() === "POST" && new URL(r.url()).pathname === "/api/v1/plans",
+  );
+  const generate = page.getByRole("button", { name: "Generate immutable change plan", exact: true });
+  const writesBeforeAdmission = writes.length;
+  try {
+    await generate.click();
+    await expect.poll(() => admitted).toBe(1);
+    await expect(generate).toBeDisabled();
+    await page.locator("#plan-form").evaluate((form) => {
+      form.dispatchEvent(new Event("submit", { bubbles: true, cancelable: true }));
+      form.dispatchEvent(new Event("submit", { bubbles: true, cancelable: true }));
+    });
+    for (const [width, height, label] of [
+      [1440, 1000, "desktop"],
+      [390, 844, "mobile"],
+    ] as const) {
+      await page.setViewportSize({ width, height });
+      expect(await page.evaluate(() => document.documentElement.scrollWidth <= innerWidth)).toBe(true);
+      await page
+        .locator("#connect")
+        .screenshot({ path: testInfo.outputPath(`plan-generation-pending-${label}.png`) });
+    }
+    await page
+      .locator("#connection-configure")
+      .screenshot({ path: testInfo.outputPath("plan-generation-pending-control.png") });
+    expect(admitted).toBe(1);
+    expect(writes).toHaveLength(writesBeforeAdmission + 1);
+    expect(await (await request.get("/api/v1/snapshot", { headers })).json()).toEqual(admissionBefore);
+  } finally {
+    release();
+  }
+  const generatedResult = await generatedResponse;
+  expect(generatedResult.status()).toBe(200);
+  const admittedPlan = await generatedResult.json();
+  expect(admittedPlan.id).not.toBe(subsetPlan.id);
+  expect(admittedPlan.request).toEqual(subsetPlan.request);
+  await expect(page.locator("#plans")).toBeVisible();
+  await expect(page.locator("#plan-list article")).toHaveAttribute("data-plan-id", admittedPlan.id);
+  await page.getByText("Technical plan identifiers & original evidence", { exact: true }).click();
+  expect(JSON.parse(await page.locator("#plan-list article details pre").innerText())).toEqual(admittedPlan);
+  const admissionAfter = (await (await request.get("/api/v1/snapshot", { headers })).json()) as Snapshot;
+  expect(admissionAfter.plans).toHaveLength(admissionBefore.plans.length + 1);
+  expect(admissionAfter.plans).toContainEqual(subsetPlan);
+  expect(admissionAfter.plans).toContainEqual(admittedPlan);
+  expect(admissionAfter.operations).toEqual(admissionBefore.operations);
+  expect(admitted).toBe(1);
+  expect(writes).toHaveLength(writesBeforeAdmission + 1);
+  await page.unroute("**/api/v1/plans");
+  await page.locator("#fault").selectOption("none");
+  const appliedResponse = page.waitForResponse(
+    (r) =>
+      r.request().method() === "POST" &&
+      new URL(r.url()).pathname === `/api/v1/plans/${admittedPlan.id}/apply`,
+  );
+  await page.getByRole("button", { name: "Apply reviewed plan", exact: true }).click();
+  const appliedResult = await appliedResponse;
+  expect(appliedResult.status()).toBe(200);
+  const admittedOperation = await appliedResult.json();
+  expect(admittedOperation.plan_id).toBe(admittedPlan.id);
+  await expect(page.locator("#operations")).toBeVisible();
+  await expect(page.locator("#operation-list article")).toHaveAttribute(
+    "data-operation-id",
+    admittedOperation.id,
+  );
+  const operationAfter = (await (await request.get("/api/v1/snapshot", { headers })).json()) as Snapshot;
+  expect(operationAfter.plans.find((p) => p.id === admittedPlan.id)).toEqual(admittedPlan);
+  expect(operationAfter.plans.find((p) => p.id === subsetPlan.id)).toEqual(subsetPlan);
+  expect(operationAfter.operations.find((o) => o.id === admittedOperation.id)?.plan_id).toBe(admittedPlan.id);
+  expect(writes).toHaveLength(writesBeforeAdmission + 2);
 });

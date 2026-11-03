@@ -84,6 +84,7 @@ let awsViewVersion = 0;
 let selectedPlanId: string | undefined;
 let planSearch = { query: "" };
 let planViewVersion = 0;
+let pendingPlanGeneration: { source: Snapshot; version: number; control: HTMLButtonElement } | undefined;
 let selectedOperationId: string | undefined;
 let operationSearch = { query: "" };
 let operationViewVersion = 0;
@@ -103,6 +104,7 @@ let workspaceRequestedPlan:
   | undefined;
 const navigation = createNavigation(app, () => {
   session.retireRequests();
+  retirePlanGeneration();
   ++awsViewVersion;
   selectedAwsAccountId = undefined;
   ++networkWorkspaceVersion;
@@ -215,10 +217,19 @@ function renderSubnets() {
     }),
   );
 }
+function retirePlanGeneration() {
+  const pending = pendingPlanGeneration;
+  pendingPlanGeneration = undefined;
+  if (pending) {
+    pending.control.disabled = !isAdmin();
+    delete pending.control.dataset.pending;
+  }
+}
 function retireConnectionInput(control: HTMLElement): boolean {
   if (!control.isConnected || !element("plan-form").contains(control) || element("connect").hidden)
     return false;
   session.retireRequests();
+  retirePlanGeneration();
   element("notice").replaceChildren();
   return true;
 }
@@ -872,6 +883,7 @@ function clearSession() {
   selectedPlanId = undefined;
   planSearch = { query: "" };
   ++planViewVersion;
+  retirePlanGeneration();
   connectionStep(false);
   element<HTMLFormElement>("aws-register").reset();
   element("aws-register").hidden = true;
@@ -984,6 +996,8 @@ element<HTMLFormElement>("plan-form").onsubmit = (event) => {
   event.preventDefault();
   const source = snapshot;
   const version = session.version;
+  if (!source || !isAdmin() || !element("plan-form").isConnected || element("connect").hidden) return;
+  if (pendingPlanGeneration?.source === source && pendingPlanGeneration.version === version) return;
   void run(
     async () => {
       if (!configuringConnection) {
@@ -1004,14 +1018,24 @@ element<HTMLFormElement>("plan-form").onsubmit = (event) => {
         network_id: element<HTMLSelectElement>("network").value,
         allow_application_traffic: false,
       };
-      const plan = await request<Plan>("/plans", body);
-      if (version !== session.version || snapshot !== source) return;
-      const viewVersion = planViewVersion;
-      await refresh();
-      if (version !== session.version || planViewVersion !== viewVersion + 1) return;
-      selectedPlanId = plan.id;
-      renderPlans(snapshot?.plans ?? []);
-      navigation.navigate("plans");
+      const control = element("connection-configure").querySelector<HTMLButtonElement>("button[data-write]");
+      if (!control || control.disabled) return;
+      const admission = { source, version, control };
+      pendingPlanGeneration = admission;
+      control.disabled = true;
+      control.dataset.pending = "";
+      try {
+        const plan = await request<Plan>("/plans", body);
+        if (version !== session.version || snapshot !== source) return;
+        const viewVersion = planViewVersion;
+        await refresh();
+        if (version !== session.version || planViewVersion !== viewVersion + 1) return;
+        selectedPlanId = plan.id;
+        renderPlans(snapshot?.plans ?? []);
+        navigation.navigate("plans");
+      } finally {
+        if (pendingPlanGeneration === admission) retirePlanGeneration();
+      }
     },
     () => version === session.version && snapshot === source,
   );
