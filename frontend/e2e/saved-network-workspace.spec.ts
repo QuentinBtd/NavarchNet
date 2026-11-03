@@ -399,4 +399,65 @@ test("real browser: saved map filters loaded records by literal ID without new r
   expect(await readback.json()).toEqual(view);
   const coreReadback = await request.get("/api/v1/snapshot", { headers });
   expect(await coreReadback.json()).toEqual(before);
+
+  // Saved subnet -> original calculated table -> source return, after all earlier oracles.
+  const sourceRecord = view.topology.resources.find((resource) => {
+    const rows = view.subnet_route_tables.filter((row) => row.subnet_id === resource.id);
+    return resource.kind === "subnet" && rows.length === 1 && rows[0].selection.status === "selected";
+  });
+  if (!sourceRecord) throw new Error("Missing selected subnet fixture");
+  const calculatedRow = view.subnet_route_tables.find((row) => row.subnet_id === sourceRecord.id);
+  if (calculatedRow?.selection.status !== "selected") throw new Error("Missing selected calculation");
+  const targetId = calculatedRow.selection.route_table_id;
+  const targetRecords = view.topology.resources.filter((record) => record.id === targetId);
+  expect(targetRecords).toHaveLength(1);
+  const targetRecord = targetRecords[0],
+    targetIndex = view.topology.resources.indexOf(targetRecord);
+  expect(targetRecord.kind).toBe("route_table");
+  expect(targetRecord.vpc_id).toBe(sourceRecord.vpc_id);
+  expect(targetRecord.routes.length).toBeGreaterThan(0);
+  await map.getByLabel("Observed resource kind", { exact: true }).selectOption("subnet");
+  await filter.fill(sourceRecord.id);
+  await expect(inspector).toContainText(sourceRecord.id);
+  await inspector.getByText("Original captured record", { exact: true }).click();
+  expect(JSON.parse(await inspector.locator("pre").innerText())).toEqual(sourceRecord);
+  const inspectTable = inspector.getByRole("button", {
+    name: "Inspect calculated table record",
+    exact: true,
+  });
+  await expect(inspectTable).toBeVisible();
+  await inspectTable.focus();
+  await page.keyboard.press("Enter");
+  await expect(inspector).toContainText(targetRecord.id);
+  await expect(map.locator(`button[data-record-index="${targetIndex}"]`)).toHaveAttribute(
+    "aria-pressed",
+    "true",
+  );
+  await expect(map.getByLabel("Observed resource kind", { exact: true })).toHaveValue("route_table");
+  await expect(filter).toHaveValue("");
+  await inspector.getByText("Original captured record", { exact: true }).click();
+  expect(JSON.parse(await inspector.locator("pre").innerText())).toEqual(targetRecord);
+  await inspector.getByText("Original captured record", { exact: true }).click();
+  const routes = inspector.locator("details[data-captured-route-entries]");
+  await routes.getByText("Reported route entries", { exact: true }).click();
+  await expect(routes.locator("li[data-route-index]")).toHaveCount(Math.min(12, targetRecord.routes.length));
+  await expect(inspector).toContainText("Not a destination-route decision");
+  for (const [width, height, label] of [
+    [1440, 1080, "desktop"],
+    [390, 844, "mobile"],
+  ] as const) {
+    await page.setViewportSize({ width, height });
+    expect(await page.evaluate(() => document.documentElement.scrollWidth <= innerWidth)).toBe(true);
+    await map.screenshot({ path: testInfo.outputPath(`saved-subnet-table-navigation-${label}.png`) });
+  }
+  await inspector.getByRole("button", { name: "Return to source subnet", exact: true }).focus();
+  await page.keyboard.press("Enter");
+  await expect(inspector).toContainText(sourceRecord.id);
+  await expect(map.getByLabel("Observed resource kind", { exact: true })).toHaveValue("subnet");
+  await expect(filter).toHaveValue(sourceRecord.id);
+  await inspector.getByText("Original captured record", { exact: true }).click();
+  expect(JSON.parse(await inspector.locator("pre").innerText())).toEqual(sourceRecord);
+  expect(calls).toEqual([]);
+  expect(await (await request.get(url, { headers })).json()).toEqual(view);
+  expect(await (await request.get("/api/v1/snapshot", { headers })).json()).toEqual(before);
 });

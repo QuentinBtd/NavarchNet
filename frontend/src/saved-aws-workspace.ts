@@ -1,5 +1,5 @@
 import { renderCapturedRouteRecords } from "./captured-route-records";
-import type { AwsTopology, ResourceKind, TopologyView } from "./generated";
+import type { AwsResource, AwsTopology, ResourceKind, TopologyView } from "./generated";
 import { renderNatMetadata } from "./nat-metadata-view";
 import { text } from "./view";
 
@@ -120,12 +120,69 @@ export function renderSavedAwsWorkspace(
   root.dataset.topologyId = topology.id;
   root.dataset.completedAt = topology.completed_at;
   const tableRows = validatedTableRows(topology, context);
+  const sourceResources = topology.resources,
+    sourceRows = context?.subnet_route_tables;
+  const identity = () =>
+    JSON.stringify([
+      topology.id,
+      topology.account_id,
+      topology.aws_account_id,
+      topology.region,
+      topology.completed_at,
+      topology.execution_enabled,
+      topology.connectivity_tested,
+      topology.complete_for_supported_queries,
+    ]);
+  const originalIdentity = identity();
+  function tableFor(subnet: AwsResource) {
+    if (
+      topology.resources !== sourceResources ||
+      context?.subnet_route_tables !== sourceRows ||
+      identity() !== originalIdentity ||
+      !valid(topology)
+    )
+      return;
+    if (
+      subnet.kind !== "subnet" ||
+      !scalar(subnet.vpc_id) ||
+      !topology.resources.includes(subnet) ||
+      topology.resources.filter((r) => r.id === subnet.id).length !== 1
+    )
+      return;
+    const rows = validatedTableRows(topology, context)?.filter((row) => row.subnet_id === subnet.id);
+    const row = rows?.length === 1 ? rows[0] : undefined;
+    if (!row || row.vpc_id !== subnet.vpc_id || row.selection.status !== "selected") return;
+    const tableId = row.selection.route_table_id;
+    const matches = topology.resources.flatMap((r, index) => (r.id === tableId ? [{ table: r, index }] : []));
+    if (matches.length !== 1) return;
+    const { table, index } = matches[0];
+    if (table.kind !== "route_table" || table.vpc_id !== subnet.vpc_id) return;
+    if (
+      [subnet, table].some((r) => ["id", "kind", "vpc_id"].some((field) => !Object.hasOwn(r, field))) ||
+      ["subnet_id", "vpc_id", "selection"].some((field) => !Object.hasOwn(row, field)) ||
+      ["status", "route_table_id", "source"].some((field) => !Object.hasOwn(row.selection, field))
+    )
+      return;
+    return { table, index, row };
+  }
+  type ReturnContext = {
+    filter: string;
+    query: string;
+    selected: number;
+    limit: number;
+    start: number;
+    subnet: AwsResource;
+    table: AwsResource;
+    valid: () => boolean;
+  };
+  let returnTo: ReturnContext | undefined;
   const counts = new Map<string, number>();
   for (const record of topology.resources) counts.set(record.id, (counts.get(record.id) ?? 0) + 1);
   let filter = "all",
     query = "",
     selected = 0,
     limit = 24,
+    start = 0,
     version = 0;
   function draw(focus?: "kind" | "search", cursor?: [number, number]) {
     const epoch = ++version;
@@ -161,6 +218,8 @@ export function renderSavedAwsWorkspace(
     select.onchange = () => {
       if (!active(select)) return;
       filter = select.value;
+      returnTo = undefined;
+      start = 0;
       selected = -1;
       limit = 24;
       draw("kind");
@@ -179,6 +238,8 @@ export function renderSavedAwsWorkspace(
     search.oninput = () => {
       if (!active(search)) return;
       query = search.value;
+      returnTo = undefined;
+      start = 0;
       selected = -1;
       limit = 24;
       draw("search", [search.selectionStart ?? query.length, search.selectionEnd ?? query.length]);
@@ -187,14 +248,14 @@ export function renderSavedAwsWorkspace(
     controls.append(kindControl, searchControl);
     const count = text(
       "p",
-      `Showing ${Math.min(limit, indexes.length)} of ${indexes.length} filtered records · ${topology.resources.length} records in this capture, not a cloud total.`,
+      `Showing ${Math.min(limit, indexes.length - start)} of ${indexes.length} filtered records · ${topology.resources.length} records in this capture, not a cloud total.${start ? ` Filtered positions ${start + 1}–${Math.min(start + limit, indexes.length)}.` : ""}`,
     );
     const layout = document.createElement("div");
     layout.className = "saved-map-layout";
     const map = document.createElement("div");
     map.className = "saved-map-lanes";
     const groups = new Map<string, HTMLElement>();
-    for (const index of indexes.slice(0, limit)) {
+    for (const index of indexes.slice(start, start + limit)) {
       const r = topology.resources[index];
       const lane = lanes[r.kind];
       let group = groups.get(lane);
@@ -218,6 +279,7 @@ export function renderSavedAwsWorkspace(
       );
       button.onclick = () => {
         if (!active(button)) return;
+        returnTo = undefined;
         selected = index;
         draw();
         root.querySelector<HTMLButtonElement>("[aria-pressed=true]")?.focus();
@@ -246,6 +308,32 @@ export function renderSavedAwsWorkspace(
         record.public_ips.length ? record.public_ips.map(reported).join(", ") : "None reported",
       );
       inspector.append(fields);
+      const origin = returnTo;
+      if (origin && record === origin.table) {
+        const back = text("button", "Return to source subnet");
+        back.type = "button";
+        back.onclick = () => {
+          if (
+            back.disabled ||
+            !active(back) ||
+            back.parentElement !== inspector ||
+            returnTo !== origin ||
+            !origin.valid()
+          )
+            return;
+          ({ filter, query, selected, limit, start } = origin);
+          returnTo = undefined;
+          draw();
+          root.querySelector<HTMLButtonElement>(`button[data-record-index="${selected}"]`)?.focus();
+        };
+        inspector.append(
+          text(
+            "p",
+            `Source subnet: ${origin.subnet.id} · same capture ${topology.id}. Not a destination-route decision, health check or verified path.`,
+          ),
+          back,
+        );
+      }
       if (record.kind === "subnet") {
         const calculated = document.createElement("div");
         calculated.dataset.capturedSubnetTable = "";
@@ -265,12 +353,75 @@ export function renderSavedAwsWorkspace(
               "Calculated table selection unavailable or ambiguous for this original record. Refresh the saved observation.",
             ),
           );
-        else if (row.selection.status === "selected")
+        else if (row.selection.status === "selected") {
           calculated.append(
             text("p", `Selected table: ${row.selection.route_table_id}`),
             text("p", `Association source: ${row.selection.source}`),
           );
-        else calculated.append(text("p", `Selection unresolved: ${row.selection.reason}`));
+          const target = tableFor(record);
+          const sourceIndex = selected;
+          let original: string | undefined;
+          try {
+            if (target) original = JSON.stringify([record, target.table, target.row]);
+          } catch {
+            /* Unserializable callback data cannot authorize navigation. */
+          }
+          const currentTarget = () => {
+            try {
+              const live = tableFor(record);
+              return (
+                !!target &&
+                original !== undefined &&
+                topology.resources[sourceIndex] === record &&
+                live?.table === target.table &&
+                live.row === target.row &&
+                live.index === target.index &&
+                JSON.stringify([record, live.table, live.row]) === original
+              );
+            } catch {
+              return false;
+            }
+          };
+          const inspect = text("button", "Inspect calculated table record");
+          inspect.type = "button";
+          inspect.disabled = !currentTarget();
+          inspect.onclick = () => {
+            if (
+              inspect.disabled ||
+              !active(inspect) ||
+              inspect.parentElement !== calculated ||
+              !target ||
+              !currentTarget()
+            )
+              return;
+            returnTo = {
+              filter,
+              query,
+              selected,
+              limit,
+              start,
+              subnet: record,
+              table: target.table,
+              valid: currentTarget,
+            };
+            filter = "route_table";
+            query = "";
+            selected = target.index;
+            const position = topology.resources.filter((r) => r.kind === "route_table").indexOf(target.table);
+            start = Math.floor(position / 24) * 24;
+            limit = 24;
+            draw();
+            root.querySelector<HTMLButtonElement>(`button[data-record-index="${selected}"]`)?.focus();
+          };
+          calculated.append(inspect);
+          if (inspect.disabled)
+            calculated.append(
+              text(
+                "p",
+                "Captured selected table record unavailable or ambiguous. Original subnet evidence is unchanged.",
+              ),
+            );
+        } else calculated.append(text("p", `Selection unresolved: ${row.selection.reason}`));
         calculated.append(text("p", "Not a destination-route decision, health check or verified path."));
         inspector.append(calculated);
       }
@@ -303,9 +454,31 @@ export function renderSavedAwsWorkspace(
       }
     } else inspector.append(text("p", "Select a captured record to inspect its original metadata."));
     layout.append(map, inspector);
+    const earlier: HTMLElement[] = [];
+    if (start > 0) {
+      const previous = text("button", "Show earlier captured records");
+      previous.type = "button";
+      previous.onclick = () => {
+        if (
+          previous.disabled ||
+          !active(previous) ||
+          previous.parentElement !== root ||
+          start <= 0 ||
+          (returnTo && !returnTo.valid())
+        )
+          return;
+        start = Math.max(0, start - 24);
+        limit = 24;
+        selected = indexes[start] ?? -1;
+        returnTo = undefined;
+        draw();
+        root.querySelector<HTMLButtonElement>("[aria-pressed=true]")?.focus();
+      };
+      earlier.push(previous);
+    }
     const more = text("button", "Show more captured records");
     more.type = "button";
-    more.hidden = limit >= indexes.length;
+    more.hidden = start + limit >= indexes.length;
     more.onclick = () => {
       if (active(more)) {
         limit += 24;
@@ -333,6 +506,7 @@ export function renderSavedAwsWorkspace(
       controls,
       count,
       layout,
+      ...earlier,
       more,
       text("p", "Saved observation · kind grouping only · no inferred network links"),
       explanation,
