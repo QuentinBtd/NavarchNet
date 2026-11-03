@@ -1579,4 +1579,113 @@ test("real API simulation inventory has a scoped network map and read-only inspe
     expect(writes).toHaveLength(historyWrites);
     expect(await (await request.get("/api/v1/snapshot", { headers })).json()).toEqual(manualSnapshot);
   }
+
+  // Overview attention: real bounded statuses from the preceding persisted journeys, no new mutation.
+  {
+    const attentionBefore = (await (await request.get("/api/v1/snapshot", { headers })).json()) as Snapshot;
+    const attentionRecords = attentionBefore.operations.filter(
+      (o) => o.status === "failed" || o.status === "partial",
+    );
+    expect(attentionRecords.length).toBeGreaterThan(0);
+    const chosen = attentionRecords
+      .slice(0, 6)
+      .find(
+        (o) => attentionBefore.plans.filter((p) => p.id === o.plan_id && p.scope === o.scope).length === 1,
+      );
+    if (!chosen) throw new Error("Existing persisted attention fixture needs an original returned Plan");
+    const chosenPlan = attentionBefore.plans.find((p) => p.id === chosen.plan_id);
+    const attentionPageCalls: string[] = [];
+    const recordAttentionCall = (r: import("@playwright/test").Request) => {
+      if (new URL(r.url()).pathname.startsWith("/api/v1/"))
+        attentionPageCalls.push(`${r.method()} ${new URL(r.url()).pathname}`);
+    };
+    page.on("request", recordAttentionCall);
+    const writesBefore = writes.length;
+    await page
+      .getByRole("navigation", { name: "Workspace" })
+      .getByRole("link", { name: "Overview", exact: true })
+      .click();
+    await expect(page.locator("#overview")).toBeVisible();
+    const attention = page.getByRole("region", { name: "Returned operation attention", exact: true });
+    await expect(attention).toContainText(`${attentionBefore.operations.length} returned operations`);
+    await expect(attention).toContainText(`${attentionRecords.length} failed/partial`);
+    await expect(attention).toContainText("bounded history, not connectivity or proof of rollback");
+    expect(
+      await attention
+        .locator("[data-attention-operation]")
+        .evaluateAll((rows) => rows.map((r) => (r as HTMLElement).dataset.attentionOperation)),
+    ).toEqual(attentionRecords.slice(0, 6).map((o) => o.id));
+    for (const row of attentionRecords.slice(0, 6)) {
+      const item = attention.locator(`[data-attention-operation="${row.id}"]`);
+      await expect(item).toContainText(row.status);
+      await expect(item).toContainText(row.scope);
+      if (row.error !== null && row.error !== "") await expect(item).toContainText(row.error);
+      await expect(item.getByRole("link")).toHaveAttribute(
+        "href",
+        `#/operations?operation=${encodeURIComponent(row.id)}`,
+      );
+    }
+    await page.setViewportSize({ width: 1440, height: 1000 });
+    await page.screenshot({
+      path: testInfo.outputPath("operation-attention-overview-desktop.png"),
+      fullPage: true,
+    });
+    await page.setViewportSize({ width: 390, height: 844 });
+    await page.screenshot({
+      path: testInfo.outputPath("operation-attention-overview-mobile.png"),
+      fullPage: true,
+    });
+    expect(await page.evaluate(() => document.documentElement.scrollWidth <= innerWidth)).toBe(true);
+    expect(attentionPageCalls).toEqual([]);
+    await attention.locator(`[data-attention-operation="${chosen.id}"]`).getByRole("link").focus();
+    await page.keyboard.press("Enter");
+    await expect(page.locator("#operations")).toBeVisible();
+    await expect(page.getByLabel("Operation to inspect", { exact: true })).toHaveValue(chosen.id);
+    expect(
+      JSON.parse((await page.locator("#operation-list article details pre").textContent()) ?? "null"),
+    ).toEqual(chosen);
+    await expect(page.getByRole("region", { name: "Manual recovery guidance", exact: true })).toBeVisible();
+    await page
+      .locator("#operation-list")
+      .getByRole("button", { name: "Review original plan", exact: true })
+      .focus();
+    await page.keyboard.press("Enter");
+    await expect(page.locator("#plans")).toBeVisible();
+    await expect(page.getByLabel("Plan to review", { exact: true })).toHaveValue(chosen.plan_id);
+    expect(
+      JSON.parse((await page.locator("#plan-list article details pre").textContent()) ?? "null"),
+    ).toEqual(chosenPlan);
+    const downloadReady = page.waitForEvent("download");
+    await page
+      .locator("#plan-list")
+      .getByRole("button", { name: "Download original plan JSON", exact: true })
+      .focus();
+    await page.keyboard.press("Enter");
+    const downloadedPlan = await downloadReady;
+    expect(downloadedPlan.suggestedFilename()).toBe("navarchnet-plan.json");
+    const originalPlanFile = testInfo.outputPath("operation-attention-original-plan.json");
+    await downloadedPlan.saveAs(originalPlanFile);
+    expect(JSON.parse(await readFile(originalPlanFile, "utf8"))).toEqual(chosenPlan);
+    expect(attentionPageCalls).toEqual([]);
+    await page
+      .getByRole("navigation", { name: "Workspace" })
+      .getByRole("link", { name: "Overview", exact: true })
+      .click();
+    await expect(page.locator("#overview")).toBeVisible();
+    const manualAttentionRefresh = page.waitForResponse(
+      (r) => new URL(r.url()).pathname === "/api/v1/snapshot",
+    );
+    await page.getByRole("button", { name: "Refresh", exact: true }).click();
+    expect(await (await manualAttentionRefresh).json()).toEqual(attentionBefore);
+    await expect(page.locator("#notice")).toContainText("Updated.");
+    await expect(attention).toContainText(`${attentionRecords.length} failed/partial`);
+    expect(attentionPageCalls).toEqual(["GET /api/v1/snapshot"]);
+    expect(writes).toHaveLength(writesBefore);
+    expect(await (await request.get("/api/v1/snapshot", { headers })).json()).toEqual(attentionBefore);
+    await page.getByRole("button", { name: "Sign out", exact: true }).click();
+    await expect(page.locator("#operation-attention")).toBeEmpty();
+    await expect(page.locator("#workspace")).toBeHidden();
+    expect(attentionPageCalls).toEqual(["GET /api/v1/snapshot"]);
+    page.off("request", recordAttentionCall);
+  }
 });

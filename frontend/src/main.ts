@@ -30,6 +30,7 @@ import {
   renderNetworkWorkspace,
   workspaceForPlan,
 } from "./network-workspace";
+import { renderOperationAttention } from "./operation-attention";
 import { renderOperationInspectionExport } from "./operation-inspection-export";
 import { readOperationReviewIntent } from "./operation-review-link";
 import { originalPlanForOperation, renderOperationReview } from "./operation-review-view";
@@ -862,6 +863,17 @@ async function refresh(canPublish = () => true) {
     `${snapshot.mode} authentication · ${snapshot.role} · simulated execution · AWS read-only ${snapshot.aws_read_only_enabled ? "enabled" : "disabled"}`;
   element("summary").textContent =
     `${snapshot.accounts.length} simulated accounts · ${snapshot.aws_accounts.length} AWS read-only account/region registrations · ${snapshot.networks.length} simulated regional networks · ${snapshot.operations.length} recent simulated operations (bounded list)`;
+  const source = snapshot;
+  const operations = source.operations;
+  const attention = renderOperationAttention(
+    operations,
+    () =>
+      snapshot === source &&
+      source.operations === operations &&
+      !element("overview").hidden &&
+      element("operation-attention").contains(attention),
+  );
+  element("operation-attention").replaceChildren(attention);
   element("account-list").replaceChildren(
     ...snapshot.accounts.map((account) => {
       const item = document.createElement("li");
@@ -941,6 +953,7 @@ function clearSession() {
     "operation-step-history",
     "operation-events",
     "summary",
+    "operation-attention",
     "vpc",
     "network",
     "subnets",
