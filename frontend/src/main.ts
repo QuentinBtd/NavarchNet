@@ -1,6 +1,7 @@
 import { renderShell } from "./app-shell";
 import { renderAwsTopology } from "./aws-view";
 import { renderConnectionNetworkContext } from "./connection-network-context";
+import { renderConnectionScopePreview } from "./connection-scope-preview";
 import type {
   Account,
   ApplyPlan,
@@ -221,7 +222,9 @@ function renderSubnets() {
       input.name = "subnet";
       input.value = subnet.id;
       input.checked = true;
-      input.onchange = () => retireConnectionInput(input);
+      input.onchange = () => {
+        if (retireConnectionInput(input)) renderSelectedNetworkContext();
+      };
       label.append(
         input,
         document.createTextNode(
@@ -985,23 +988,38 @@ element<HTMLFormElement>("aws-register").onsubmit = (event) => {
 };
 const vpcChoice = element<HTMLSelectElement>("vpc");
 vpcChoice.onchange = () => {
-  if (retireConnectionInput(vpcChoice)) renderSubnets();
+  if (retireConnectionInput(vpcChoice)) {
+    renderSubnets();
+    renderSelectedNetworkContext();
+  }
 };
 const networkChoice = element<HTMLSelectElement>("network");
 const networkContext = document.createElement("div");
 networkContext.id = "connection-network-context";
 networkContext.setAttribute("aria-live", "polite");
 networkChoice.after(networkContext);
+const scopeContext = document.createElement("div");
+scopeContext.id = "connection-scope-context";
+scopeContext.setAttribute("aria-live", "polite");
+element("subnets").after(scopeContext);
 networkChoice.onchange = () => {
   if (retireConnectionInput(networkChoice)) renderSelectedNetworkContext();
 };
 let configuringConnection = false;
 function renderSelectedNetworkContext() {
   networkContext.replaceChildren();
-  if (snapshot && configuringConnection)
+  scopeContext.replaceChildren();
+  if (snapshot && configuringConnection) {
     networkContext.append(
       renderConnectionNetworkContext(snapshot.networks, element<HTMLSelectElement>("network").value),
     );
+    scopeContext.append(
+      renderConnectionScopePreview(
+        selectedInventory(),
+        [...document.querySelectorAll<HTMLInputElement>('input[name="subnet"]:checked')].map((s) => s.value),
+      ),
+    );
+  }
 }
 function connectionStep(configure: boolean) {
   const inventory = configure ? selectedInventory() : undefined;

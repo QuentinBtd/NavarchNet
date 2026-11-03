@@ -1688,4 +1688,137 @@ test("real API simulation inventory has a scoped network map and read-only inspe
     expect(attentionPageCalls).toEqual(["GET /api/v1/snapshot"]);
     page.off("request", recordAttentionCall);
   }
+
+  // Selected attachment scope: explicit fresh simulation setup, then local preview and one real Generate.
+  {
+    const accountReply = await request.post("/api/v1/accounts", {
+      headers,
+      data: { name: `Scope preview ${suffix}`, provider: "fake", role_arn: "fake:demo-role" },
+    });
+    expect(accountReply.ok()).toBe(true);
+    const scopeAccount = (await accountReply.json()) as Account;
+    const inventoryReply = await request.post(`/api/v1/accounts/${scopeAccount.id}/discover`, {
+      headers,
+      data: {},
+    });
+    expect(inventoryReply.ok()).toBe(true);
+    const scopeInventory = (await inventoryReply.json()) as Inventory;
+    const networkReply = await request.post("/api/v1/networks", {
+      headers,
+      data: { name: `Scope preview network ${suffix}` },
+    });
+    expect(networkReply.ok()).toBe(true);
+    const scopeNetwork = (await networkReply.json()) as RegionalNetwork;
+    expect(scopeInventory.subnets).toHaveLength(2);
+    const scopeBefore = (await (await request.get("/api/v1/snapshot", { headers })).json()) as Snapshot;
+    await page.goto("/#/connections");
+    await page
+      .getByLabel("Demo token or OIDC access token")
+      .fill("browser-test-admin-credential-free-local-only");
+    const scopeLogin = page.waitForResponse((r) => new URL(r.url()).pathname === "/api/v1/snapshot");
+    await page.getByRole("button", { name: "Connect", exact: true }).click();
+    expect(await (await scopeLogin).json()).toEqual(scopeBefore);
+    await expect(page.locator("#connect")).toBeVisible();
+    await page.getByLabel("Discovered VPC", { exact: true }).selectOption(scopeInventory.vpc_id);
+    await page.getByRole("button", { name: "Configure connection", exact: true }).click();
+    await expect(page.locator("#connection-configure")).toBeVisible();
+    const scopeCalls: string[] = [];
+    const recordScopeCall = (r: import("@playwright/test").Request) => {
+      if (new URL(r.url()).pathname.startsWith("/api/v1/"))
+        scopeCalls.push(`${r.method()} ${new URL(r.url()).pathname}`);
+    };
+    page.on("request", recordScopeCall);
+    await page.getByLabel("Regional egress network", { exact: true }).selectOption(scopeNetwork.id);
+    const scopePreview = page.getByRole("region", { name: "Selected attachment scope", exact: true });
+    await expect(scopePreview).toHaveAttribute("data-vpc-id", scopeInventory.vpc_id);
+    await expect(scopePreview).toContainText(scopeInventory.account_id);
+    await expect(scopePreview).toContainText(scopeInventory.cidr);
+    await expect(scopePreview).toContainText("2 selected attachment subnets");
+    await expect(scopePreview).toContainText(
+      `${new Set(scopeInventory.subnets.map((s) => s.route_table)).size} reported route tables`,
+    );
+    expect(
+      await scopePreview
+        .locator("[data-selected-subnet]")
+        .evaluateAll((rows) => rows.map((r) => (r as HTMLElement).dataset.selectedSubnet)),
+    ).toEqual(scopeInventory.subnets.map((s) => s.id));
+    await page.locator(`#subnets input[value="${scopeInventory.subnets[0].id}"]`).uncheck();
+    const selectedSubnet = scopeInventory.subnets[1];
+    await expect(scopePreview).toContainText("1 selected attachment subnets");
+    await expect(scopePreview).toContainText("1 reported AZ IDs");
+    await expect(scopePreview).toContainText("1 reported route tables");
+    await expect(scopePreview).toContainText(selectedSubnet.az_id);
+    await expect(scopePreview).toContainText(selectedSubnet.route_table);
+    await expect(scopePreview.locator("[data-selected-subnet]")).toHaveAttribute(
+      "data-selected-subnet",
+      selectedSubnet.id,
+    );
+    await expect(scopePreview).toContainText("not a generated plan or observed routing");
+    expect(scopeCalls).toEqual([]);
+    expect(await (await request.get("/api/v1/snapshot", { headers })).json()).toEqual(scopeBefore);
+    await page.setViewportSize({ width: 1440, height: 1000 });
+    await page.screenshot({
+      path: testInfo.outputPath("connection-scope-preview-desktop.png"),
+      fullPage: true,
+    });
+    await page.setViewportSize({ width: 390, height: 844 });
+    await page.screenshot({
+      path: testInfo.outputPath("connection-scope-preview-mobile.png"),
+      fullPage: true,
+    });
+    expect(await page.evaluate(() => document.documentElement.scrollWidth <= innerWidth)).toBe(true);
+    const generatedReply = page.waitForResponse(
+      (r) => new URL(r.url()).pathname === "/api/v1/plans" && r.request().method() === "POST",
+    );
+    const scopePublished = page.waitForResponse((r) => new URL(r.url()).pathname === "/api/v1/snapshot");
+    await page.getByRole("button", { name: "Generate immutable change plan", exact: true }).focus();
+    await page.keyboard.press("Enter");
+    const planResponse = await generatedReply;
+    expect(planResponse.ok()).toBe(true);
+    const originalScopePlan = (await planResponse.json()) as Snapshot["plans"][number];
+    expect(planResponse.request().postDataJSON()).toEqual({
+      account_id: scopeInventory.account_id,
+      vpc_id: scopeInventory.vpc_id,
+      subnet_ids: [selectedSubnet.id],
+      network_id: scopeNetwork.id,
+      allow_application_traffic: false,
+    });
+    expect(originalScopePlan.request).toEqual(planResponse.request().postDataJSON());
+    const scopeAfter = (await (await scopePublished).json()) as Snapshot;
+    await expect(page.locator("#plans")).toBeVisible();
+    await expect(page.getByLabel("Plan to review", { exact: true })).toHaveValue(originalScopePlan.id);
+    expect(
+      JSON.parse((await page.locator("#plan-list article details pre").textContent()) ?? "null"),
+    ).toEqual(originalScopePlan);
+    expect(scopeAfter.plans.filter((p) => p.id === originalScopePlan.id)).toEqual([originalScopePlan]);
+    expect({ ...scopeAfter, plans: scopeAfter.plans.filter((p) => p.id !== originalScopePlan.id) }).toEqual(
+      scopeBefore,
+    );
+    expect(scopeCalls).toEqual(["POST /api/v1/plans", "GET /api/v1/snapshot"]);
+    const scopeDownload = page.waitForEvent("download");
+    await page
+      .locator("#plan-list")
+      .getByRole("button", { name: "Download original plan JSON", exact: true })
+      .focus();
+    await page.keyboard.press("Enter");
+    const downloadedScopePlan = await scopeDownload;
+    expect(downloadedScopePlan.suggestedFilename()).toBe("navarchnet-plan.json");
+    const scopePlanPath = testInfo.outputPath("connection-scope-original-plan.json");
+    await downloadedScopePlan.saveAs(scopePlanPath);
+    expect(JSON.parse(await readFile(scopePlanPath, "utf8"))).toEqual(originalScopePlan);
+    await page.locator("#plan-list [data-plan-reconfigure]").click();
+    await expect(page.locator("#connect")).toBeVisible();
+    await expect(scopePreview.locator("[data-selected-subnet]")).toHaveAttribute(
+      "data-selected-subnet",
+      selectedSubnet.id,
+    );
+    await expect(scopePreview).toContainText("1 selected attachment subnets");
+    expect(scopeCalls).toEqual(["POST /api/v1/plans", "GET /api/v1/snapshot"]);
+    expect(await (await request.get("/api/v1/snapshot", { headers })).json()).toEqual(scopeAfter);
+    await page.getByRole("button", { name: "Back to VPC selection", exact: true }).click();
+    await expect(page.locator("#connection-scope-context")).toBeEmpty();
+    await page.getByRole("button", { name: "Sign out", exact: true }).click();
+    await expect(page.locator("#connection-scope-context")).toBeEmpty();
+    page.off("request", recordScopeCall);
+  }
 });
