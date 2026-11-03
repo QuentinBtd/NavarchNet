@@ -982,6 +982,58 @@ test("real browser: register, discover, plan, apply, observe drift and partial f
   expect(await (await page.request.get("/api/v1/snapshot", { headers: readerHeaders })).json()).toEqual(
     browserHintBefore,
   );
+
+  // Manual recovery context follows every prior offline/history/nonmutation oracle.
+  const recoveryBefore: Snapshot = await (
+    await page.request.get("/api/v1/snapshot", { headers: readerHeaders })
+  ).json();
+  const recoveryOperation = recoveryBefore.operations.find((row) => row.id === secondOperation.id);
+  expect(recoveryOperation?.status).toBe("partial");
+  const recoveryPlan = recoveryBefore.plans.find((row) => row.id === recoveryOperation?.plan_id);
+  expect(recoveryPlan).toBeDefined();
+  const recoveryCalls = reviewCalls.length;
+  await page
+    .getByRole("navigation", { name: "Workspace" })
+    .getByRole("link", { name: "Operations", exact: true })
+    .click();
+  await expect(page.locator("#operations")).toBeVisible();
+  await page.getByLabel("Search returned operations", { exact: true }).fill("");
+  await page.getByLabel("Operation to inspect", { exact: true }).selectOption(secondOperation.id);
+  const recoveryCard = page.locator("#operation-list article");
+  await expect(recoveryCard).toHaveAttribute("data-operation-id", secondOperation.id);
+  await expect(recoveryCard).toContainText("Partial completion");
+  const recoveryGuide = recoveryCard.getByRole("region", { name: "Manual recovery guidance", exact: true });
+  await expect(recoveryGuide).toBeVisible();
+  await expect(recoveryGuide).toContainText("not proof that earlier changes were undone");
+  await expect(recoveryGuide).toContainText("does not retry, roll back or repair");
+  expect(JSON.parse((await recoveryCard.locator("details pre").textContent()) ?? "null")).toEqual(
+    recoveryOperation,
+  );
+  expect(await recoveryGuide.locator("button, a, input, select, form").count()).toBe(0);
+  for (const [label, width, height] of [
+    ["desktop", 1280, 900],
+    ["mobile", 375, 812],
+  ] as const) {
+    await page.setViewportSize({ width, height });
+    await page
+      .locator("#workspace")
+      .screenshot({ path: testInfo.outputPath(`operation-recovery-${label}.png`) });
+  }
+  await recoveryCard.getByRole("button", { name: "Review original plan", exact: true }).focus();
+  await page.keyboard.press("Enter");
+  await expect(page.locator("#plans")).toBeVisible();
+  await expect(page.locator("#plan-list article")).toHaveAttribute(
+    "data-plan-id",
+    recoveryOperation?.plan_id ?? "missing",
+  );
+  expect(JSON.parse((await page.locator("#plan-list article pre").textContent()) ?? "null")).toEqual(
+    recoveryPlan,
+  );
+  await expect(page.getByRole("button", { name: "Apply reviewed plan", exact: true })).toBeDisabled();
+  expect(reviewCalls.slice(recoveryCalls)).toEqual([]);
+  expect(await (await page.request.get("/api/v1/snapshot", { headers: readerHeaders })).json()).toEqual(
+    recoveryBefore,
+  );
 });
 
 test("read-only session cannot mutate through UI or API", async ({ page, request }) => {

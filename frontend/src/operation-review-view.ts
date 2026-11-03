@@ -126,6 +126,27 @@ export function renderOperationReview(operations: Operation[], plans: Plan[], op
     ),
   );
   if (operation.error) card.append(text("p", operation.error));
+  if (operation.status === "partial" || operation.status === "failed") {
+    const guidance = document.createElement("section");
+    guidance.setAttribute("role", "region");
+    guidance.setAttribute("aria-label", "Manual recovery guidance");
+    guidance.append(
+      text("h4", "Recovery review"),
+      text(
+        "p",
+        `${operation.status === "partial" ? "Partial completion was reported" : "Failure was reported"}. This is not proof that earlier changes were undone. This view does not retry, roll back or repair anything.`,
+      ),
+    );
+    const steps = document.createElement("ol");
+    for (const step of [
+      "Use Review original plan when available to inspect the original request and intended actions. If unavailable in returned history, do not substitute another plan.",
+      "Use Inspect result & step events explicitly to read captured state and ordered persisted events. These are not connectivity measurements.",
+      "After resolving a reported conflict, explicitly rediscover and review a new plan before another change. Do not edit persisted operation or fencing data.",
+    ])
+      steps.append(text("li", step));
+    guidance.append(steps);
+    card.append(guidance);
+  }
   if (options.onReviewPlan) {
     const review = text("button", "Review original plan");
     review.type = "button";
