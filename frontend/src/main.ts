@@ -365,10 +365,12 @@ function renderPlans(plans: Plan[]) {
     !element("plans").hidden;
   let prepareRoot: HTMLElement | undefined;
   let prepareControl: HTMLButtonElement | undefined;
+  const isReviewCurrent = (): boolean =>
+    isCurrent() && prepareRoot?.isConnected === true && element("plan-list").contains(prepareRoot);
   prepareRoot = renderPlanReview(plans, {
     selectedPlanId,
     searchState: planSearch,
-    isCurrent,
+    isCurrent: isReviewCurrent,
     currentSnapshot: source,
     workspaceSnapshot: source,
     get canReconfigure() {
@@ -424,7 +426,7 @@ function renderPlans(plans: Plan[]) {
     onLocateScope: (plan, inventory, network) => {
       if (
         !source ||
-        !isCurrent() ||
+        !isReviewCurrent() ||
         snapshot !== source ||
         source.plans !== plans ||
         plan !== originalPlan ||
@@ -465,7 +467,7 @@ function renderPlans(plans: Plan[]) {
     },
     operations: source?.operations,
     onReviewOperation: (plan, operation) => {
-      if (!source || !isCurrent() || snapshot !== source) return;
+      if (!source || !isReviewCurrent() || snapshot !== source) return;
       const matches = source.plans.filter((record) => record.id === plan.id);
       if (
         matches.length !== 1 ||
@@ -479,7 +481,7 @@ function renderPlans(plans: Plan[]) {
       navigation.navigate("operations");
     },
     onSelect: (id) => {
-      if (!isCurrent()) return;
+      if (!isReviewCurrent()) return;
       session.retireRequests();
       element("notice").replaceChildren();
       selectedPlanId = id;
@@ -550,6 +552,8 @@ function renderOperations(operations: Operation[]) {
     app?.isConnected === true &&
     !!snapshot &&
     !element("operations").hidden;
+  const isReviewCurrent = (): boolean =>
+    isCurrent() && review.isConnected && element("operation-list").contains(review);
   function action(label: string, execute: (current: () => boolean) => Promise<void>, writes = false) {
     const isActionCurrent = (): boolean =>
       isCurrent() &&
@@ -590,9 +594,9 @@ function renderOperations(operations: Operation[]) {
   const review = renderOperationReview(operations, snapshot?.plans ?? [], {
     selectedOperationId,
     searchState: operationSearch,
-    isCurrent,
+    isCurrent: isReviewCurrent,
     onReviewPlan: (plan) => {
-      if (!source || !isCurrent() || snapshot !== source || plan !== originalPlan) return;
+      if (!source || !isReviewCurrent() || snapshot !== source || plan !== originalPlan) return;
       if (
         !originalOperation ||
         !originalIdentity ||
@@ -610,7 +614,7 @@ function renderOperations(operations: Operation[]) {
       navigation.navigate("plans");
     },
     onSelect: (id) => {
-      if (!isCurrent()) return;
+      if (!isReviewCurrent()) return;
       session.retireRequests();
       element("notice").replaceChildren();
       selectedOperationId = id;

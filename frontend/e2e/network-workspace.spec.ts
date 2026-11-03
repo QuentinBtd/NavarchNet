@@ -1359,4 +1359,224 @@ test("real API simulation inventory has a scoped network map and read-only inspe
   expect(localCalls).toHaveLength(operationFinalCalls);
   expect(writes).toHaveLength(operationFrameWrites + 1);
   expect(await (await request.get("/api/v1/snapshot", { headers })).json()).toEqual(manualSnapshot);
+
+  // Original-history local actions: controlled DOM displacement, no new server mutation.
+  {
+    const historyCalls = localCalls.length,
+      historyWrites = writes.length;
+    for (const workspace of ["plans", "operations"]) {
+      const kind = workspace === "plans" ? "plan" : "operation";
+      await expect(page.locator(`#${workspace}`)).toBeVisible();
+      await expect(page.locator(`#${kind}-list article`)).toHaveAttribute(
+        `data-${kind}-id`,
+        workspace === "plans" ? lifecyclePlan.id : lifecycleOperation.id,
+      );
+      const label = workspace === "plans" ? "Review recorded operation" : "Review original plan";
+      const evidence = await page
+        .locator("#observation, #operation-events, #operation-step-history, #operation-export")
+        .evaluateAll((nodes) => nodes.map((n) => n.innerHTML));
+      const notice = await page.locator("#notice").textContent();
+      for (const displacement of ["removed-control", "moved-control", "removed-review", "moved-review"]) {
+        await page.evaluate(
+          ({ kind, label, displacement }) => {
+            const mount = document.getElementById(`${kind}-list`),
+              card = mount?.querySelector("article"),
+              review = card?.parentElement,
+              elsewhere = document.getElementById("diagnostics");
+            const control = [...(card?.querySelectorAll<HTMLButtonElement>("button") ?? [])].find(
+              (n) => n.textContent === label,
+            );
+            if (!mount || !card || !review || !elsewhere || !control || control.disabled)
+              throw new Error("Missing original local history fixture");
+            const next = control.nextSibling;
+            if (displacement === "removed-control") control.remove();
+            else if (displacement === "moved-control") elsewhere.append(control);
+            else if (displacement === "removed-review") review.remove();
+            else elsewhere.append(review);
+            control.dispatchEvent(new MouseEvent("click"));
+            if (displacement.endsWith("control")) card.insertBefore(control, next);
+            else mount.append(review);
+          },
+          { kind, label, displacement },
+        );
+        await page.evaluate(() => new Promise((done) => requestAnimationFrame(done)));
+        await expect(page.locator(`#${workspace}`)).toBeVisible();
+        expect(localCalls).toHaveLength(historyCalls);
+        expect(writes).toHaveLength(historyWrites);
+        expect(
+          await page
+            .locator("#observation, #operation-events, #operation-step-history, #operation-export")
+            .evaluateAll((nodes) => nodes.map((n) => n.innerHTML)),
+        ).toEqual(evidence);
+        await expect(page.locator("#notice")).toHaveText(notice ?? "");
+      }
+      if (workspace === "plans") {
+        const downloads: string[] = [];
+        const collectDownload = (download: { suggestedFilename(): string }) =>
+          downloads.push(download.suggestedFilename());
+        page.on("download", collectDownload);
+        try {
+          const blocked = await page.evaluate(() => {
+            const mount = document.getElementById("plan-list"),
+              card = mount?.querySelector("article"),
+              review = card?.parentElement,
+              elsewhere = document.getElementById("diagnostics");
+            const download = card?.querySelector<HTMLButtonElement>("[data-plan-export]"),
+              detail = card?.querySelector<HTMLElement>('[aria-label="Requested action detail"]'),
+              link = card?.querySelector<HTMLAnchorElement>("[data-plan-review-link]");
+            const next = [...(card?.querySelectorAll<HTMLButtonElement>("button") ?? [])].find(
+              (n) => n.textContent === "Next proposed action",
+            );
+            if (!mount || !review || !elsewhere || !download || !detail || !link || !next || next.disabled)
+              throw new Error("Missing local original evidence fixture");
+            const before = detail.dataset.actionIndex;
+            elsewhere.append(review);
+            let canceled = false;
+            link.addEventListener(
+              "click",
+              (event) => {
+                canceled = event.defaultPrevented;
+                event.preventDefault();
+              },
+              { once: true },
+            );
+            link.dispatchEvent(new MouseEvent("click", { cancelable: true }));
+            download.click();
+            next.click();
+            const after = detail.dataset.actionIndex;
+            mount.append(review);
+            return { before, after, canceled };
+          });
+          expect(blocked.before).toBe("0");
+          expect(blocked.after).toBe(blocked.before);
+          expect(blocked.canceled).toBe(true);
+          await page.evaluate(() => new Promise((done) => requestAnimationFrame(done)));
+          expect(downloads).toEqual([]);
+        } finally {
+          page.off("download", collectDownload);
+        }
+        await page
+          .locator("#plan-list")
+          .getByRole("button", { name: "Next proposed action", exact: true })
+          .click();
+        await expect(page.locator('#plan-list [aria-label="Requested action detail"]')).toHaveAttribute(
+          "data-action-index",
+          "1",
+        );
+        await expect(page.locator("#plan-list [data-proposed-target]")).toHaveText(
+          lifecyclePlan.actions[1]?.target ?? "missing original target",
+        );
+        // Collapse only the already-open original technical disclosure through its ordinary control.
+        await page
+          .locator("#plan-list")
+          .getByText("Technical plan identifiers & original evidence", { exact: true })
+          .click();
+        await page.setViewportSize({ width: 1440, height: 1000 });
+        await page.screenshot({
+          path: testInfo.outputPath("history-local-plan-evidence-desktop.png"),
+          fullPage: true,
+        });
+        await page.setViewportSize({ width: 390, height: 844 });
+        await page.screenshot({
+          path: testInfo.outputPath("history-local-plan-evidence-mobile.png"),
+          fullPage: true,
+        });
+        expect(await page.evaluate(() => document.documentElement.scrollWidth <= innerWidth)).toBe(true);
+        await page.setViewportSize({ width: 1440, height: 1000 });
+        const downloaded = page.waitForEvent("download");
+        await page
+          .locator("#plan-list")
+          .getByRole("button", { name: "Download original plan JSON", exact: true })
+          .focus();
+        await page.keyboard.press("Enter");
+        const file = await downloaded,
+          destination = testInfo.outputPath("history-local-original-plan.json");
+        expect(file.suggestedFilename()).toBe("navarchnet-plan.json");
+        await file.saveAs(destination);
+        expect(JSON.parse(await readFile(destination, "utf8"))).toEqual(lifecyclePlan);
+      }
+      await page.locator(`#${kind}-list`).getByRole("button", { name: label, exact: true }).focus();
+      await page.keyboard.press("Enter");
+      await expect(page.locator(workspace === "plans" ? "#operations" : "#plans")).toBeVisible();
+      expect(localCalls).toHaveLength(historyCalls);
+      expect(writes).toHaveLength(historyWrites);
+    }
+    // A refused local navigation must not retire the still-current original pending read.
+    await page
+      .locator("#plan-list")
+      .getByRole("button", { name: "Review recorded operation", exact: true })
+      .click();
+    await expect(page.locator("#operations")).toBeVisible();
+    let historyReadReady!: () => void, historyReadRelease!: () => void;
+    const historyReadEntered = new Promise<void>((done) => {
+      historyReadReady = done;
+    });
+    const historyReadGate = new Promise<void>((done) => {
+      historyReadRelease = done;
+    });
+    await page.route(`**${operationFramePath}/observation`, async (route) => {
+      const response = await route.fetch();
+      expect(response.ok()).toBe(true);
+      historyReadReady();
+      await historyReadGate;
+      await route.fulfill({ response });
+    });
+    const historyObservation = page.waitForResponse(
+      (response) => new URL(response.url()).pathname === `${operationFramePath}/observation`,
+    );
+    const historyEvents = page.waitForResponse(
+      (response) => new URL(response.url()).pathname === `${operationFramePath}/events`,
+    );
+    await operationFrameInspect().click();
+    await historyReadEntered;
+    try {
+      const current = await page.evaluate(() => {
+        const mount = document.getElementById("operation-list"),
+          card = mount?.querySelector("article"),
+          review = card?.parentElement,
+          elsewhere = document.getElementById("diagnostics");
+        const local = [...(card?.querySelectorAll<HTMLButtonElement>("button") ?? [])].find(
+          (n) => n.textContent === "Review original plan",
+        );
+        if (!mount || !review || !elsewhere || !local || local.disabled)
+          throw new Error("Missing pending local review fixture");
+        elsewhere.append(review);
+        local.click();
+        const hash = location.hash,
+          notice = document.getElementById("notice")?.textContent;
+        mount.append(review);
+        return { hash, notice };
+      });
+      expect(current.hash).toBe("#/operations");
+      expect(current.notice).toBe("Working…");
+      await expect(operationFrameInspect()).toBeDisabled();
+    } finally {
+      historyReadRelease();
+    }
+    expect((await (await historyObservation).json()).operation_id).toBe(lifecycleOperation.id);
+    expect(await (await historyEvents).json()).toEqual(operationFrameRows);
+    await expect(page.locator("#operation-export [data-operation-export]")).toBeVisible();
+    await expect(operationFrameInspect()).toBeEnabled();
+    await page.unroute(`**${operationFramePath}/observation`);
+    expect(localCalls).toHaveLength(historyCalls + 2);
+    expect(writes).toHaveLength(historyWrites);
+    await page
+      .locator("#operation-list")
+      .getByText("Technical operation identifiers & persisted state", { exact: true })
+      .click();
+    expect(JSON.parse(await page.locator("#operation-list article details pre").innerText())).toEqual(
+      operationFrameRecord,
+    );
+    await page
+      .locator("#operation-list")
+      .getByRole("button", { name: "Review original plan", exact: true })
+      .click();
+    await expect(page.locator("#plans")).toBeVisible();
+    expect(
+      JSON.parse((await page.locator("#plan-list article details pre").textContent()) ?? "null"),
+    ).toEqual(lifecyclePlan);
+    expect(localCalls).toHaveLength(historyCalls + 2);
+    expect(writes).toHaveLength(historyWrites);
+    expect(await (await request.get("/api/v1/snapshot", { headers })).json()).toEqual(manualSnapshot);
+  }
 });
