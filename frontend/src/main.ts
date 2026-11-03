@@ -146,9 +146,9 @@ const isAdmin = () => snapshot?.role === "admin";
 async function request<T>(path: string, body?: unknown): Promise<T> {
   return session.request<T>(path, body);
 }
-async function refreshAfterAcknowledged(kind: "plan" | "operation", id: string) {
+async function refreshAfterAcknowledged(kind: "plan" | "operation", id: string, canPublish = () => true) {
   try {
-    await refresh();
+    await refresh(canPublish);
   } catch (error) {
     const acknowledged =
       kind === "plan"
@@ -487,25 +487,37 @@ function renderPlans(plans: Plan[]) {
       if (readPlanReviewIntent(window.location.hash).kind !== "none") navigation.navigate("plans");
       element("plan-selection").focus();
     },
-    makeApply: (plan) =>
-      button(
+    makeApply: (plan) => {
+      const isApplyCurrent = () =>
+        isCurrent() &&
+        apply.isConnected &&
+        prepareRoot?.isConnected === true &&
+        prepareRoot.contains(apply) &&
+        element("plan-list").contains(prepareRoot);
+      const apply: HTMLButtonElement = button(
         "Apply reviewed plan",
         async () => {
           const generation = session.version;
           const source = snapshot;
           const body: ApplyPlan = { fault: element<HTMLSelectElement>("fault").value as Fault };
           const operation = await request<Operation>(`/plans/${plan.id}/apply`, body);
-          if (generation !== session.version || snapshot !== source || !isCurrent()) return;
-          await refreshAfterAcknowledged("operation", operation.id);
+          if (generation !== session.version || snapshot !== source || !isApplyCurrent()) return;
+          let published = false;
+          await refreshAfterAcknowledged("operation", operation.id, () => {
+            published = isApplyCurrent();
+            return published;
+          });
           // The followup retires this draw once; an intervening refresh retires it again.
-          if (generation !== session.version || planViewVersion !== version + 1) return;
+          if (!published || generation !== session.version || planViewVersion !== version + 1) return;
           selectedOperationId = operation.id;
           renderOperations(snapshot?.operations ?? []);
           navigation.navigate("operations");
         },
         true,
-        isCurrent,
-      ),
+        isApplyCurrent,
+      );
+      return apply;
+    },
   });
   prepareControl = prepareRoot.querySelector<HTMLButtonElement>("button[data-plan-reconfigure]") ?? undefined;
   element("plan-list").replaceChildren(prepareRoot);
@@ -827,8 +839,10 @@ function renderAwsAccounts() {
     }),
   );
 }
-async function refresh() {
-  snapshot = await request<Snapshot>("/snapshot");
+async function refresh(canPublish = () => true) {
+  const next = await request<Snapshot>("/snapshot");
+  if (!canPublish()) return;
+  snapshot = next;
   const planIntent = readPlanReviewIntent(window.location.hash);
   if (planIntent.kind !== "none") selectedPlanId = planIntent.kind === "plan" ? planIntent.id : "";
   const operationIntent = readOperationReviewIntent(window.location.hash);

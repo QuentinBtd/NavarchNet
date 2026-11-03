@@ -888,4 +888,209 @@ test("real API simulation inventory has a scoped network map and read-only inspe
   expect(localCalls).toHaveLength(ackRecoverySelectionCalls);
   expect(writes).toHaveLength(ackRecoveryWrites + 2);
   expect(await (await request.get("/api/v1/snapshot", { headers })).json()).toEqual(ackRecoveryFinalSnapshot);
+
+  // Retained DOM is a controlled lifecycle fixture, not corrupt HTTP or a cloud claim.
+  // Keep every previous oracle; actual successful writes below still reach the real server.
+  await page
+    .getByRole("navigation", { name: "Workspace" })
+    .getByRole("link", { name: "Connections / plans", exact: true })
+    .click();
+  await expect(page.locator("#connect")).toBeVisible();
+  await page.getByRole("link", { name: "Review existing change plans", exact: true }).click();
+  await expect(page.locator("#plans")).toBeVisible();
+  await page.locator("#plan-selection").selectOption(ackRecoveryPlan.id);
+  await page
+    .getByRole("button", { name: "Configure another plan from original request", exact: true })
+    .click();
+  await expect(page.locator("#connection-configure")).toBeVisible();
+  const lifecycleWrites = writes.length;
+  const lifecycleGenerated = page.waitForResponse(
+    (r) => r.request().method() === "POST" && new URL(r.url()).pathname === "/api/v1/plans",
+  );
+  await page.getByRole("button", { name: "Generate immutable change plan", exact: true }).click();
+  const lifecycleGeneratedResponse = await lifecycleGenerated;
+  expect(lifecycleGeneratedResponse.status()).toBe(200);
+  const lifecyclePlan = (await lifecycleGeneratedResponse.json()) as Snapshot["plans"][number];
+  expect(lifecyclePlan.request).toEqual(ackRecoveryPlan.request);
+  await expect(page.locator("#plans")).toBeVisible();
+  await expect(page.locator("#plan-list article")).toHaveAttribute("data-plan-id", lifecyclePlan.id);
+  await page.getByText("Technical plan identifiers & original evidence", { exact: true }).click();
+  expect(JSON.parse(await page.locator("#plan-list article details pre").innerText())).toEqual(lifecyclePlan);
+  const lifecycleBefore = (await (await request.get("/api/v1/snapshot", { headers })).json()) as Snapshot;
+  const lifecycleCalls = localCalls.length;
+  await page.evaluate(async () => {
+    const apply = document.querySelector<HTMLButtonElement>("#plan-list article button[data-write]");
+    const card = apply?.closest("article"),
+      review = card?.parentElement,
+      mount = review?.parentElement;
+    const elsewhere = document.getElementById("diagnostics");
+    if (!apply || !card || !review || !mount || !elsewhere || apply.disabled)
+      throw new Error("Missing current Apply fixture");
+    const next = apply.nextSibling;
+    for (const mode of ["remove-control", "move-control", "remove-review", "move-review"]) {
+      if (mode === "remove-control") apply.remove();
+      else if (mode === "move-control") elsewhere.append(apply);
+      else if (mode === "remove-review") review.remove();
+      else elsewhere.append(review);
+      apply.dispatchEvent(new MouseEvent("click"));
+      if (mode.endsWith("control")) card.insertBefore(apply, next);
+      else mount.append(review);
+    }
+    await new Promise((done) => setTimeout(done, 0));
+  });
+  expect(localCalls).toHaveLength(lifecycleCalls);
+  expect(writes).toHaveLength(lifecycleWrites + 1);
+  expect(await (await request.get("/api/v1/snapshot", { headers })).json()).toEqual(lifecycleBefore);
+  const lifecycleApply = page.getByRole("button", { name: "Apply reviewed plan", exact: true });
+  await expect(lifecycleApply).toBeEnabled();
+  let releaseLifecycle!: () => void;
+  const lifecycleGate = new Promise<void>((done) => {
+    releaseLifecycle = done;
+  });
+  let lifecycleIntercepted = false;
+  await page.route(
+    `**/api/v1/plans/${lifecyclePlan.id}/apply`,
+    async (route) => {
+      lifecycleIntercepted = true;
+      await lifecycleGate;
+      await route.continue();
+    },
+    { times: 1 },
+  );
+  const lifecyclePost = page.waitForResponse(
+    (r) =>
+      r.request().method() === "POST" &&
+      new URL(r.url()).pathname === `/api/v1/plans/${lifecyclePlan.id}/apply`,
+  );
+  const lifecycleFollowup = page.waitForResponse(
+    (r) => r.request().method() === "GET" && new URL(r.url()).pathname === "/api/v1/snapshot",
+  );
+  try {
+    await lifecycleApply.click();
+    await expect.poll(() => lifecycleIntercepted).toBe(true);
+    await expect(lifecycleApply).toBeDisabled();
+    await lifecycleApply.dispatchEvent("click");
+    await lifecycleApply.dispatchEvent("click");
+    expect(writes).toHaveLength(lifecycleWrites + 2);
+    for (const [width, height, label] of [
+      [1440, 1000, "desktop"],
+      [390, 844, "mobile"],
+    ] as const) {
+      await page.setViewportSize({ width, height });
+      expect(await page.evaluate(() => document.documentElement.scrollWidth <= innerWidth)).toBe(true);
+      await page.screenshot({
+        path: testInfo.outputPath(`original-apply-pending-${label}.png`),
+        fullPage: true,
+      });
+    }
+  } finally {
+    releaseLifecycle();
+  }
+  const lifecyclePostResponse = await lifecyclePost;
+  expect(lifecyclePostResponse.status()).toBe(200);
+  expect(lifecyclePostResponse.request().postDataJSON()).toEqual({ fault: "none" });
+  const lifecycleOperation = (await lifecyclePostResponse.json()) as Snapshot["operations"][number];
+  expect(lifecycleOperation.plan_id).toBe(lifecyclePlan.id);
+  const lifecycleSnapshot = (await (await lifecycleFollowup).json()) as Snapshot;
+  await expect(page.locator("#operations")).toBeVisible();
+  await expect(page.locator("#operation-list article")).toHaveAttribute(
+    "data-operation-id",
+    lifecycleOperation.id,
+  );
+  await page.getByText("Technical operation identifiers & persisted state", { exact: true }).click();
+  expect(JSON.parse(await page.locator("#operation-list article details pre").innerText())).toEqual(
+    lifecycleSnapshot.operations.find((o) => o.id === lifecycleOperation.id),
+  );
+  const lifecycleSaved = (await (await request.get("/api/v1/snapshot", { headers })).json()) as Snapshot;
+  expect(lifecycleSaved.operations).toHaveLength(lifecycleBefore.operations.length + 1);
+  expect(lifecycleSaved.operations.filter((o) => o.plan_id === lifecyclePlan.id)).toHaveLength(1);
+  expect(lifecycleSaved.plans).toEqual(lifecycleBefore.plans);
+  expect(lifecycleSaved.plans.find((p) => p.id === lifecyclePlan.id)).toEqual(lifecyclePlan);
+  expect(writes).toHaveLength(lifecycleWrites + 2);
+
+  // Reapplying this same Plan uses the existing server idempotent return, not a new operation claim.
+  await page.locator("#operation-selection").selectOption(ackRecoveryOperation.id);
+  await page
+    .getByRole("navigation", { name: "Workspace" })
+    .getByRole("link", { name: "Connections / plans", exact: true })
+    .click();
+  await expect(page.locator("#connect")).toBeVisible();
+  await page.getByRole("link", { name: "Review existing change plans", exact: true }).click();
+  await expect(page.locator("#plans")).toBeVisible();
+  await page.locator("#plan-selection").selectOption(lifecyclePlan.id);
+  let releaseRetiredRead!: () => void;
+  const retiredReadGate = new Promise<void>((done) => {
+    releaseRetiredRead = done;
+  });
+  let retiredReadStarted = false;
+  await page.route(
+    "**/api/v1/snapshot",
+    async (route) => {
+      retiredReadStarted = true;
+      await retiredReadGate;
+      await route.continue();
+    },
+    { times: 1 },
+  );
+  const retiredPost = page.waitForResponse(
+    (r) =>
+      r.request().method() === "POST" &&
+      new URL(r.url()).pathname === `/api/v1/plans/${lifecyclePlan.id}/apply`,
+  );
+  const retiredRead = page.waitForResponse(
+    (r) => r.request().method() === "GET" && new URL(r.url()).pathname === "/api/v1/snapshot",
+  );
+  try {
+    await page.getByRole("button", { name: "Apply reviewed plan", exact: true }).click();
+    const repeated = await retiredPost;
+    expect(repeated.status()).toBe(200);
+    expect((await repeated.json()).id).toBe(lifecycleOperation.id);
+    await expect.poll(() => retiredReadStarted).toBe(true);
+    await page.evaluate(() => {
+      const review = document.querySelector("#plan-list article")?.parentElement;
+      const elsewhere = document.getElementById("diagnostics");
+      if (!review || !elsewhere) throw new Error("Missing pending review fixture");
+      elsewhere.append(review);
+    });
+  } finally {
+    releaseRetiredRead();
+  }
+  await (await retiredRead).json();
+  await page.evaluate(() => new Promise((done) => setTimeout(done, 0)));
+  await expect(page.locator("#plans")).toBeVisible();
+  await expect(page.locator("#plan-list article")).toHaveCount(0);
+  await expect(page.locator("#operation-list article")).toHaveAttribute(
+    "data-operation-id",
+    ackRecoveryOperation.id,
+  );
+  expect(writes).toHaveLength(lifecycleWrites + 3);
+  await expect
+    .poll(async () => {
+      const saved = (await (await request.get("/api/v1/snapshot", { headers })).json()) as Snapshot;
+      return saved.operations.find((o) => o.id === lifecycleOperation.id)?.status;
+    })
+    .toBe("succeeded");
+  const manualRecovery = page.waitForResponse(
+    (r) => r.request().method() === "GET" && new URL(r.url()).pathname === "/api/v1/snapshot",
+  );
+  await page.locator("#refresh").click();
+  const manualSnapshot = (await (await manualRecovery).json()) as Snapshot;
+  await expect(page.locator("#notice")).toContainText("Updated.");
+  await expect(page.locator("#plan-list article")).toHaveAttribute("data-plan-id", lifecyclePlan.id);
+  const manualCalls = localCalls.length;
+  await page
+    .getByRole("navigation", { name: "Workspace" })
+    .getByRole("link", { name: "Operations", exact: true })
+    .click();
+  await expect(page.locator("#operations")).toBeVisible();
+  await page.locator("#operation-selection").selectOption(lifecycleOperation.id);
+  await page.getByText("Technical operation identifiers & persisted state", { exact: true }).click();
+  expect(JSON.parse(await page.locator("#operation-list article details pre").innerText())).toEqual(
+    manualSnapshot.operations.find((o) => o.id === lifecycleOperation.id),
+  );
+  expect(localCalls).toHaveLength(manualCalls);
+  expect(manualSnapshot.operations).toHaveLength(lifecycleBefore.operations.length + 1);
+  expect(manualSnapshot.plans).toEqual(lifecycleBefore.plans);
+  expect(writes).toHaveLength(lifecycleWrites + 3);
+  expect(await (await request.get("/api/v1/snapshot", { headers })).json()).toEqual(manualSnapshot);
 });
