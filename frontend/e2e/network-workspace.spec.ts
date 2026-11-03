@@ -1093,4 +1093,270 @@ test("real API simulation inventory has a scoped network map and read-only inspe
   expect(manualSnapshot.plans).toEqual(lifecycleBefore.plans);
   expect(writes).toHaveLength(lifecycleWrites + 3);
   expect(await (await request.get("/api/v1/snapshot", { headers })).json()).toEqual(manualSnapshot);
+
+  // Original-operation DOM lifecycle fixture: real paired GETs and real demo POST only.
+  const operationFramePath = `/api/v1/operations/${lifecycleOperation.id}`;
+  const operationFrameRecord = manualSnapshot.operations.find((o) => o.id === lifecycleOperation.id);
+  if (!operationFrameRecord) throw new Error("Missing persisted original operation fixture");
+  const operationFrameInspect = () =>
+    page
+      .locator("#operation-list")
+      .getByRole("button", { name: "Inspect result & step events", exact: true });
+  const operationFrameDrift = () =>
+    page.locator("#operation-list").getByRole("button", { name: "Simulate external drift", exact: true });
+  const operationFrameObservation = page.waitForResponse(
+    (r) =>
+      r.request().method() === "GET" && new URL(r.url()).pathname === `${operationFramePath}/observation`,
+  );
+  const operationFrameEvents = page.waitForResponse(
+    (r) => r.request().method() === "GET" && new URL(r.url()).pathname === `${operationFramePath}/events`,
+  );
+  await operationFrameInspect().click();
+  const operationFrameObserved = await (await operationFrameObservation).json();
+  const operationFrameRows = await (await operationFrameEvents).json();
+  expect(operationFrameObserved.operation_id).toBe(lifecycleOperation.id);
+  await expect(page.locator("#operation-events")).toHaveText(JSON.stringify(operationFrameRows, null, 2));
+  await expect(operationFrameInspect()).toBeEnabled();
+  await expect(operationFrameDrift()).toBeEnabled();
+  const operationFrameDownload = page.locator("#operation-export [data-operation-export]");
+  await expect(operationFrameDownload).toBeVisible();
+  const operationFrameCalls = localCalls.length,
+    operationFrameWrites = writes.length;
+  const operationFrameEvidence = await page
+    .locator("#observation, #operation-step-history, #operation-events, #operation-export")
+    .evaluateAll((nodes) => nodes.map((n) => n.innerHTML));
+  const operationFrameNotice = await page.locator("#notice").textContent();
+  for (const displacement of ["removed-control", "moved-control", "removed-review", "moved-review"]) {
+    await page.evaluate((kind) => {
+      const mount = document.getElementById("operation-list"),
+        card = mount?.querySelector("article"),
+        review = card?.parentElement,
+        elsewhere = document.getElementById("diagnostics");
+      if (!mount || !card || !review || !elsewhere) throw new Error("Missing original operation DOM fixture");
+      for (const label of ["Inspect result & step events", "Simulate external drift"]) {
+        const control = [...card.querySelectorAll<HTMLButtonElement>("button")].find(
+          (n) => n.textContent === label,
+        );
+        if (!control || control.disabled) throw new Error("Missing enabled original operation control");
+        const next = control.nextSibling;
+        if (kind === "removed-control") control.remove();
+        else if (kind === "moved-control") elsewhere.append(control);
+        else if (kind === "removed-review") review.remove();
+        else elsewhere.append(review);
+        control.dispatchEvent(new MouseEvent("click"));
+        if (kind.endsWith("control")) card.insertBefore(control, next);
+        else mount.append(review);
+      }
+    }, displacement);
+    await page.evaluate(() => new Promise((done) => requestAnimationFrame(done)));
+    expect(localCalls).toHaveLength(operationFrameCalls);
+    expect(writes).toHaveLength(operationFrameWrites);
+    expect(
+      await page
+        .locator("#observation, #operation-step-history, #operation-events, #operation-export")
+        .evaluateAll((nodes) => nodes.map((n) => n.innerHTML)),
+    ).toEqual(operationFrameEvidence);
+    await expect(page.locator("#notice")).toHaveText(operationFrameNotice ?? "");
+  }
+  const operationFrameSaved = page.waitForEvent("download");
+  await operationFrameDownload.click();
+  const operationFrameFile = testInfo.outputPath("original-operation-captured-inspection.json");
+  await (await operationFrameSaved).saveAs(operationFrameFile);
+  const operationFrameCaptured = JSON.parse(await readFile(operationFrameFile, "utf8"));
+  expect(operationFrameCaptured.operation_snapshot).toEqual(operationFrameRecord);
+  expect(operationFrameCaptured.observation).toEqual(operationFrameObserved);
+  expect(operationFrameCaptured.events).toEqual(operationFrameRows);
+  expect(operationFrameCaptured.provenance.atomic_capture).toBe(false);
+  expect(operationFrameCaptured.provenance.connectivity).toBe("No measurement inferred by this export");
+  expect(localCalls).toHaveLength(operationFrameCalls);
+  expect(writes).toHaveLength(operationFrameWrites);
+
+  // Hold a real backend observation response, not a synthetic API success.
+  let operationReadReady!: () => void, operationReadRelease!: () => void;
+  const operationReadEntered = new Promise<void>((done) => {
+    operationReadReady = done;
+  });
+  const operationReadGate = new Promise<void>((done) => {
+    operationReadRelease = done;
+  });
+  await page.route(`**${operationFramePath}/observation`, async (route) => {
+    const response = await route.fetch();
+    expect(response.ok()).toBe(true);
+    operationReadReady();
+    await operationReadGate;
+    await route.fulfill({ response });
+  });
+  const operationRetiredObservation = page.waitForResponse(
+    (r) =>
+      r.request().method() === "GET" && new URL(r.url()).pathname === `${operationFramePath}/observation`,
+  );
+  await operationFrameInspect().click();
+  await operationReadEntered;
+  try {
+    await expect(operationFrameInspect()).toBeDisabled();
+    await expect(operationFrameDrift()).toBeDisabled();
+    await expect(page.locator("#notice")).toHaveText("Working…");
+    await expect(page.locator("#operation-export")).toBeEmpty();
+    await expect(page.locator("#observation")).toBeEmpty();
+    await page.setViewportSize({ width: 1440, height: 1000 });
+    await page.screenshot({
+      path: testInfo.outputPath("original-operation-inspect-pending-desktop.png"),
+      fullPage: true,
+    });
+    await page.setViewportSize({ width: 390, height: 844 });
+    await page.screenshot({
+      path: testInfo.outputPath("original-operation-inspect-pending-mobile.png"),
+      fullPage: true,
+    });
+    expect(await page.evaluate(() => document.documentElement.scrollWidth <= innerWidth)).toBe(true);
+    await page.setViewportSize({ width: 1440, height: 1000 });
+    await page.evaluate(() => {
+      const review = document.querySelector("#operation-list article")?.parentElement;
+      if (!review) throw new Error("Missing retiring original operation review");
+      review.remove();
+    });
+  } finally {
+    operationReadRelease();
+  }
+  expect((await (await operationRetiredObservation).json()).operation_id).toBe(lifecycleOperation.id);
+  await page.evaluate(() => new Promise((done) => requestAnimationFrame(done)));
+  await page.unroute(`**${operationFramePath}/observation`);
+  expect(localCalls).toHaveLength(operationFrameCalls + 1);
+  expect(writes).toHaveLength(operationFrameWrites);
+  await expect(page.locator("#operation-list article")).toHaveCount(0);
+  await expect(page.locator("#observation")).toBeEmpty();
+  await expect(page.locator("#operation-events")).toBeEmpty();
+  await expect(page.locator("#operation-export")).toBeEmpty();
+  await expect(page.locator("#notice")).toHaveText("Working…");
+  const operationFrameRefresh = page.waitForResponse((r) => new URL(r.url()).pathname === "/api/v1/snapshot");
+  await page.locator("#refresh").click();
+  expect(await (await operationFrameRefresh).json()).toEqual(manualSnapshot);
+  await expect(operationFrameInspect()).toBeEnabled();
+  await expect(operationFrameDrift()).toBeEnabled();
+  await expect(page.locator("#operation-export")).toBeEmpty();
+  expect(localCalls).toHaveLength(operationFrameCalls + 2);
+
+  // Retire the original control after observation but before the paired real event response.
+  let operationEventsReady!: () => void, operationEventsRelease!: () => void;
+  const operationEventsEntered = new Promise<void>((done) => {
+    operationEventsReady = done;
+  });
+  const operationEventsGate = new Promise<void>((done) => {
+    operationEventsRelease = done;
+  });
+  await page.route(`**${operationFramePath}/events`, async (route) => {
+    const response = await route.fetch();
+    expect(response.ok()).toBe(true);
+    operationEventsReady();
+    await operationEventsGate;
+    await route.fulfill({ response });
+  });
+  const operationRetiredEvents = page.waitForResponse(
+    (r) => r.request().method() === "GET" && new URL(r.url()).pathname === `${operationFramePath}/events`,
+  );
+  await operationFrameInspect().click();
+  await operationEventsEntered;
+  try {
+    await expect(page.locator("#observation")).toBeEmpty();
+    await expect(page.locator("#operation-export")).toBeEmpty();
+    await page.evaluate(() => {
+      const control = [...document.querySelectorAll<HTMLButtonElement>("#operation-list button")].find(
+        (n) => n.textContent === "Inspect result & step events",
+      );
+      if (!control) throw new Error("Missing retiring original Inspect control");
+      control.remove();
+    });
+  } finally {
+    operationEventsRelease();
+  }
+  expect(await (await operationRetiredEvents).json()).toEqual(operationFrameRows);
+  await page.evaluate(() => new Promise((done) => requestAnimationFrame(done)));
+  await page.unroute(`**${operationFramePath}/events`);
+  await expect(page.locator("#observation")).toBeEmpty();
+  await expect(page.locator("#operation-events")).toBeEmpty();
+  await expect(page.locator("#operation-export")).toBeEmpty();
+  await expect(operationFrameDrift()).toBeDisabled();
+  await expect(page.locator("#notice")).toHaveText("Working…");
+  expect(localCalls).toHaveLength(operationFrameCalls + 4);
+  expect(writes).toHaveLength(operationFrameWrites);
+
+  const operationFrameRecover = page.waitForResponse((r) => new URL(r.url()).pathname === "/api/v1/snapshot");
+  await page.locator("#refresh").click();
+  expect(await (await operationFrameRecover).json()).toEqual(manualSnapshot);
+  await expect(operationFrameDrift()).toBeEnabled();
+  await expect(page.locator("#operation-export")).toBeEmpty();
+  // A retired acknowledged demo mutation still persists; no cancellation/rollback is inferred.
+  let operationDriftReady!: () => void, operationDriftRelease!: () => void;
+  const operationDriftEntered = new Promise<void>((done) => {
+    operationDriftReady = done;
+  });
+  const operationDriftGate = new Promise<void>((done) => {
+    operationDriftRelease = done;
+  });
+  await page.route(`**${operationFramePath}/demo-drift`, async (route) => {
+    const response = await route.fetch();
+    expect(response.ok()).toBe(true);
+    operationDriftReady();
+    await operationDriftGate;
+    await route.fulfill({ response });
+  });
+  const operationDriftAcknowledged = page.waitForResponse(
+    (r) =>
+      r.request().method() === "POST" && new URL(r.url()).pathname === `${operationFramePath}/demo-drift`,
+  );
+  const operationDriftCalls = localCalls.length;
+  await operationFrameDrift().click();
+  await operationDriftEntered;
+  try {
+    const actualDrift = await request.get(`${operationFramePath}/observation`, { headers });
+    expect(actualDrift.ok()).toBe(true);
+    expect((await actualDrift.json()).drift).toBe(true);
+    await expect(operationFrameInspect()).toBeDisabled();
+    await page.evaluate(() => {
+      const control = [...document.querySelectorAll<HTMLButtonElement>("#operation-list button")].find(
+        (n) => n.textContent === "Simulate external drift",
+      );
+      if (!control) throw new Error("Missing retiring original drift control");
+      control.remove();
+    });
+  } finally {
+    operationDriftRelease();
+  }
+  expect((await operationDriftAcknowledged).ok()).toBe(true);
+  await page.evaluate(() => new Promise((done) => requestAnimationFrame(done)));
+  await page.unroute(`**${operationFramePath}/demo-drift`);
+  expect(localCalls).toHaveLength(operationDriftCalls + 1);
+  expect(writes).toHaveLength(operationFrameWrites + 1);
+  await expect(page.locator("#observation")).toBeEmpty();
+  await expect(page.locator("#operation-export")).toBeEmpty();
+  await expect(page.locator("#notice")).toHaveText("Working…");
+  const operationFinalRefresh = page.waitForResponse((r) => new URL(r.url()).pathname === "/api/v1/snapshot");
+  await page.locator("#refresh").click();
+  expect(await (await operationFinalRefresh).json()).toEqual(manualSnapshot);
+  await expect(operationFrameInspect()).toBeEnabled();
+  await expect(page.locator("#operation-export")).toBeEmpty();
+  const operationFinalObservation = page.waitForResponse(
+    (r) =>
+      r.request().method() === "GET" && new URL(r.url()).pathname === `${operationFramePath}/observation`,
+  );
+  const operationFinalEvents = page.waitForResponse(
+    (r) => r.request().method() === "GET" && new URL(r.url()).pathname === `${operationFramePath}/events`,
+  );
+  await operationFrameInspect().click();
+  expect((await (await operationFinalObservation).json()).drift).toBe(true);
+  expect(await (await operationFinalEvents).json()).toEqual(operationFrameRows);
+  await expect(page.locator("#operation-export [data-operation-export]")).toBeVisible();
+  await expect(page.locator("#observation")).toContainText("Detected — no automatic repair");
+  const operationFinalCalls = localCalls.length;
+  await page.getByRole("button", { name: "Review original plan", exact: true }).click();
+  await expect(page.locator("#plans")).toBeVisible();
+  await expect(page.locator("#plan-list article")).toHaveAttribute("data-plan-id", lifecyclePlan.id);
+  await page
+    .locator("#plan-list")
+    .getByText("Technical plan identifiers & original evidence", { exact: true })
+    .click();
+  expect(JSON.parse(await page.locator("#plan-list article details pre").innerText())).toEqual(lifecyclePlan);
+  expect(localCalls).toHaveLength(operationFinalCalls);
+  expect(writes).toHaveLength(operationFrameWrites + 1);
+  expect(await (await request.get("/api/v1/snapshot", { headers })).json()).toEqual(manualSnapshot);
 });

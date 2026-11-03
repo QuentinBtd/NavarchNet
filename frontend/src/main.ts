@@ -551,11 +551,17 @@ function renderOperations(operations: Operation[]) {
     !!snapshot &&
     !element("operations").hidden;
   function action(label: string, execute: (current: () => boolean) => Promise<void>, writes = false) {
-    return button(
+    const isActionCurrent = (): boolean =>
+      isCurrent() &&
+      control.isConnected &&
+      review.isConnected &&
+      review.contains(control) &&
+      element("operation-list").contains(review);
+    const control = button(
       label,
       async () => {
         const generation = session.version;
-        const current = () => isCurrent() && generation === session.version;
+        const current = () => isActionCurrent() && generation === session.version;
         // One active detail action per view; navigation retires, not cancels remote work.
         for (const control of document.querySelectorAll<HTMLButtonElement>(
           "#operation-list [data-operation-action]",
@@ -577,93 +583,92 @@ function renderOperations(operations: Operation[]) {
         }
       },
       writes,
-      isCurrent,
+      isActionCurrent,
     );
+    return control;
   }
-  element("operation-list").replaceChildren(
-    renderOperationReview(operations, snapshot?.plans ?? [], {
-      selectedOperationId,
-      searchState: operationSearch,
-      isCurrent,
-      onReviewPlan: (plan) => {
-        if (!source || !isCurrent() || snapshot !== source || plan !== originalPlan) return;
-        if (
-          !originalOperation ||
-          !originalIdentity ||
-          source.operations !== operations ||
-          selectedOperationId !== originalIdentity.id ||
-          originalOperation.id !== originalIdentity.id ||
-          originalOperation.plan_id !== originalIdentity.plan_id ||
-          originalOperation.scope !== originalIdentity.scope ||
-          originalPlanForOperation(originalOperation, operations, source.plans) !== plan
-        )
-          return;
-        session.retireRequests();
-        selectedPlanId = plan.id;
-        renderPlans(source.plans);
-        navigation.navigate("plans");
-      },
-      onSelect: (id) => {
-        if (!isCurrent()) return;
-        session.retireRequests();
-        element("notice").replaceChildren();
-        selectedOperationId = id;
-        renderOperations(operations);
-        if (readOperationReviewIntent(window.location.hash).kind !== "none")
-          navigation.navigate("operations");
-        element("operation-selection").focus();
-      },
-      makeInspect: (operation) =>
-        action("Inspect result & step events", async (current) => {
-          const value = await request<Observation>(`/operations/${operation.id}/observation`);
-          if (!current()) return;
-          if (value.operation_id !== operation.id)
-            throw new Error("Observation did not match selected operation");
-          const events = await request(`/operations/${operation.id}/events`);
-          if (!current()) return;
-          const observed = renderObservation(value);
-          const history = renderOperationStepHistory(events, operation.id, current, {
-            operation,
-            operations: source?.operations ?? [],
-            plans: source?.plans ?? [],
-          });
-          const originalEvents = JSON.stringify(events, null, 2);
-          const mount = element("operation-export");
-          const exported = renderOperationInspectionExport(
-            operation,
-            value,
-            events,
-            () =>
-              current() &&
-              mount.firstElementChild === exported &&
-              operations.includes(operation) &&
-              operations.filter((row) => row.id === operation.id).length === 1,
-          );
-          if (!current()) return;
-          element("observation").replaceChildren(observed);
-          element("operation-step-history").replaceChildren(history);
-          element("operation-events").textContent = originalEvents;
-          mount.replaceChildren(exported);
-        }),
-      makeDrift:
-        snapshot?.mode === "demo"
-          ? (operation) =>
-              action(
-                "Simulate external drift",
-                async (current) => {
-                  await request(`/operations/${operation.id}/demo-drift`, {});
-                  if (!current()) return;
-                  const value = await request<Observation>(`/operations/${operation.id}/observation`);
-                  if (!current()) return;
-                  if (value.operation_id !== operation.id)
-                    throw new Error("Observation did not match selected operation");
-                  element("observation").replaceChildren(renderObservation(value));
-                },
-                true,
-              )
-          : undefined,
-    }),
-  );
+  const review = renderOperationReview(operations, snapshot?.plans ?? [], {
+    selectedOperationId,
+    searchState: operationSearch,
+    isCurrent,
+    onReviewPlan: (plan) => {
+      if (!source || !isCurrent() || snapshot !== source || plan !== originalPlan) return;
+      if (
+        !originalOperation ||
+        !originalIdentity ||
+        source.operations !== operations ||
+        selectedOperationId !== originalIdentity.id ||
+        originalOperation.id !== originalIdentity.id ||
+        originalOperation.plan_id !== originalIdentity.plan_id ||
+        originalOperation.scope !== originalIdentity.scope ||
+        originalPlanForOperation(originalOperation, operations, source.plans) !== plan
+      )
+        return;
+      session.retireRequests();
+      selectedPlanId = plan.id;
+      renderPlans(source.plans);
+      navigation.navigate("plans");
+    },
+    onSelect: (id) => {
+      if (!isCurrent()) return;
+      session.retireRequests();
+      element("notice").replaceChildren();
+      selectedOperationId = id;
+      renderOperations(operations);
+      if (readOperationReviewIntent(window.location.hash).kind !== "none") navigation.navigate("operations");
+      element("operation-selection").focus();
+    },
+    makeInspect: (operation) =>
+      action("Inspect result & step events", async (current) => {
+        const value = await request<Observation>(`/operations/${operation.id}/observation`);
+        if (!current()) return;
+        if (value.operation_id !== operation.id)
+          throw new Error("Observation did not match selected operation");
+        const events = await request(`/operations/${operation.id}/events`);
+        if (!current()) return;
+        const observed = renderObservation(value);
+        const history = renderOperationStepHistory(events, operation.id, current, {
+          operation,
+          operations: source?.operations ?? [],
+          plans: source?.plans ?? [],
+        });
+        const originalEvents = JSON.stringify(events, null, 2);
+        const mount = element("operation-export");
+        const exported = renderOperationInspectionExport(
+          operation,
+          value,
+          events,
+          () =>
+            current() &&
+            mount.firstElementChild === exported &&
+            operations.includes(operation) &&
+            operations.filter((row) => row.id === operation.id).length === 1,
+        );
+        if (!current()) return;
+        element("observation").replaceChildren(observed);
+        element("operation-step-history").replaceChildren(history);
+        element("operation-events").textContent = originalEvents;
+        mount.replaceChildren(exported);
+      }),
+    makeDrift:
+      snapshot?.mode === "demo"
+        ? (operation) =>
+            action(
+              "Simulate external drift",
+              async (current) => {
+                await request(`/operations/${operation.id}/demo-drift`, {});
+                if (!current()) return;
+                const value = await request<Observation>(`/operations/${operation.id}/observation`);
+                if (!current()) return;
+                if (value.operation_id !== operation.id)
+                  throw new Error("Observation did not match selected operation");
+                element("observation").replaceChildren(renderObservation(value));
+              },
+              true,
+            )
+        : undefined,
+  });
+  element("operation-list").replaceChildren(review);
 }
 async function loadAwsTopology(id: string) {
   navigation.navigate("aws");
