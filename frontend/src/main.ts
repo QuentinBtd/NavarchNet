@@ -3,7 +3,6 @@ import { renderAwsTopology } from "./aws-view";
 import { renderConnectionNetworkContext } from "./connection-network-context";
 import { renderConnectionScopePreview } from "./connection-scope-preview";
 import type {
-  Account,
   ApplyPlan,
   ConnectionRequest,
   Fault,
@@ -88,6 +87,10 @@ let selectedPlanId: string | undefined;
 let planSearch = { query: "" };
 let planViewVersion = 0;
 let pendingPlanGeneration: { source: Snapshot; version: number; control: HTMLButtonElement } | undefined;
+const pendingSimulationCreations = new Map<
+  HTMLFormElement,
+  { source: Snapshot; version: number; control: HTMLButtonElement }
+>();
 let selectedOperationId: string | undefined;
 let operationSearch = { query: "" };
 let operationViewVersion = 0;
@@ -855,7 +858,7 @@ function renderAwsAccounts() {
     }),
   );
 }
-async function refresh(canPublish = () => true) {
+async function refresh(canPublish = () => true, onPublished?: (source: Snapshot) => void) {
   const next = await request<Snapshot>("/snapshot");
   if (!canPublish()) return;
   clearAuditEvidence();
@@ -920,6 +923,7 @@ async function refresh(canPublish = () => true) {
   for (const node of document.querySelectorAll<HTMLButtonElement>("[data-aws-write]"))
     node.disabled = !isAdmin() || !snapshot.aws_read_only_enabled;
   updateBrowserNetworkHint(true);
+  onPublished?.(next);
 }
 element<HTMLFormElement>("login").onsubmit = (event) => {
   event.preventDefault();
@@ -1046,25 +1050,93 @@ const connectionBack = element("connection-back");
 connectionBack.onclick = () => {
   if (retireConnectionInput(connectionBack)) connectionStep(false);
 };
-element<HTMLFormElement>("register").onsubmit = (event) => {
-  event.preventDefault();
-  void run(async () => {
-    const body: RegisterAccount = {
-      name: element<HTMLInputElement>("account-name").value,
-      provider: "fake",
-      role_arn: "fake:demo-role",
-    };
-    await request<Account>("/accounts", body);
-    await refresh();
-  });
-};
-element<HTMLFormElement>("network-form").onsubmit = (event) => {
-  event.preventDefault();
-  void run(async () => {
-    await request("/networks", { name: element<HTMLInputElement>("network-name").value });
-    await refresh();
-  });
-};
+function bindSimulationCreation(
+  formId: string,
+  workspaceId: string,
+  path: string,
+  label: string,
+  body: () => unknown,
+) {
+  const form = element<HTMLFormElement>(formId),
+    workspace = element(workspaceId);
+  const control = form.querySelector<HTMLButtonElement>("button[data-write]");
+  if (!control) throw new Error(`Missing creation control: ${formId}`);
+  const mounted = () =>
+    form.isConnected &&
+    form === document.getElementById(formId) &&
+    workspace === document.getElementById(workspaceId) &&
+    workspace.contains(form) &&
+    !workspace.hidden &&
+    form.contains(control);
+  form.onsubmit = (event) => {
+    event.preventDefault();
+    let source = snapshot;
+    const version = session.version,
+      previous = pendingSimulationCreations.get(form);
+    if (
+      !source ||
+      !isAdmin() ||
+      !mounted() ||
+      control.disabled ||
+      (previous?.source === source && previous.version === version)
+    )
+      return;
+    const admission = { source, version, control };
+    const payload = body();
+    pendingSimulationCreations.set(form, admission);
+    control.disabled = true;
+    control.dataset.pending = "";
+    const isCurrent = () =>
+      pendingSimulationCreations.get(form) === admission &&
+      version === session.version &&
+      snapshot === source &&
+      isAdmin() &&
+      mounted();
+    void run(
+      async () => {
+        try {
+          const created = await request<{ id: string }>(path, payload);
+          if (!isCurrent()) return;
+          try {
+            await refresh(isCurrent, (next) => {
+              source = next;
+            });
+          } catch (error) {
+            const cause = error instanceof Error ? error.message : "Request failed";
+            throw new Error(
+              `${label} ${created.id} was created. Saved data could not be refreshed. Refresh explicitly to find this record. Do not create it again to recover this read. ${cause}`,
+            );
+          }
+        } finally {
+          if (pendingSimulationCreations.get(form) === admission) {
+            pendingSimulationCreations.delete(form);
+            if (version === session.version && mounted()) {
+              control.disabled = !isAdmin();
+              delete control.dataset.pending;
+            }
+          }
+        }
+      },
+      () =>
+        !pendingSimulationCreations.has(form) &&
+        version === session.version &&
+        snapshot === source &&
+        isAdmin() &&
+        mounted(),
+    );
+  };
+}
+bindSimulationCreation("register", "accounts", "/accounts", "Simulation account", () => {
+  const payload: RegisterAccount = {
+    name: element<HTMLInputElement>("account-name").value,
+    provider: "fake",
+    role_arn: "fake:demo-role",
+  };
+  return payload;
+});
+bindSimulationCreation("network-form", "networks", "/networks", "Regional network", () => ({
+  name: element<HTMLInputElement>("network-name").value,
+}));
 element<HTMLFormElement>("plan-form").onsubmit = (event) => {
   event.preventDefault();
   const source = snapshot;

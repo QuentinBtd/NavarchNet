@@ -1919,4 +1919,221 @@ test("real API simulation inventory has a scoped network map and read-only inspe
     );
     page.off("request", recordAuditCall);
   }
+
+  // Simulation creation: genuine deferred POSTs, failed followup reads, explicit guided recovery.
+  {
+    const { writeFile } = await import("node:fs/promises");
+    const original = (await (await request.get("/api/v1/snapshot", { headers })).json()) as Snapshot;
+    let recoveredInventory: Inventory | undefined;
+    let recoveredNetwork: RegionalNetwork | undefined;
+    const creationEvidence: unknown[] = [];
+    for (const kind of [
+      {
+        route: "accounts",
+        form: "#register",
+        input: "#account-name",
+        path: "/api/v1/accounts",
+        label: "Simulation account",
+        name: `Recovered application ${suffix}`,
+      },
+      {
+        route: "networks",
+        form: "#network-form",
+        input: "#network-name",
+        path: "/api/v1/networks",
+        label: "Regional network",
+        name: `Recovered network ${suffix}`,
+      },
+    ]) {
+      await page.goto(`/#/${kind.route}`);
+      await page.reload();
+      await page
+        .getByLabel("Demo token or OIDC access token")
+        .fill("browser-test-admin-credential-free-local-only");
+      await page.getByRole("button", { name: "Connect", exact: true }).click();
+      await expect(page.locator(`#${kind.route}`)).toBeVisible();
+      const before = (await (await request.get("/api/v1/snapshot", { headers })).json()) as Snapshot;
+      const selectedNetworkBefore = await page.locator("#network").inputValue();
+      await page.locator(kind.form).locator("..").locator("summary").click();
+      await page.locator(kind.input).fill(kind.name);
+      let releasePost: (() => void) | undefined;
+      let returned: Account | RegionalNetwork | undefined;
+      let postCount = 0,
+        abortedReads = 0;
+      let abortNextSnapshot = false;
+      const postHandler = async (route: import("@playwright/test").Route) => {
+        if (route.request().method() !== "POST") {
+          await route.continue();
+          return;
+        }
+        postCount++;
+        await new Promise<void>((resolve) => {
+          releasePost = resolve;
+        });
+        const response = await route.fetch();
+        expect(response.ok()).toBe(true);
+        returned = (await response.json()) as Account | RegionalNetwork;
+        abortNextSnapshot = true;
+        await route.fulfill({ response });
+      };
+      const snapshotHandler = async (route: import("@playwright/test").Route) => {
+        if (abortNextSnapshot) {
+          abortNextSnapshot = false;
+          abortedReads++;
+          await route.abort("failed");
+          return;
+        }
+        await route.continue();
+      };
+      await page.route(`**${kind.path}`, postHandler);
+      await page.route("**/api/v1/snapshot", snapshotHandler);
+      const control = page.locator(`${kind.form} button[data-write]`);
+      await control.focus();
+      await page.keyboard.press("Enter");
+      await expect.poll(() => typeof releasePost).toBe("function");
+      await expect(control).toBeDisabled();
+      await page.locator(kind.input).focus();
+      await page.keyboard.press("Enter");
+      await page.locator(kind.form).evaluate((form) => {
+        form.dispatchEvent(new Event("submit", { cancelable: true }));
+        form.dispatchEvent(new Event("submit", { cancelable: true }));
+      });
+      expect(postCount).toBe(1);
+      await expect(page.locator("#notice")).toHaveText("Working…");
+      await page.setViewportSize({
+        width: kind.route === "accounts" ? 1440 : 390,
+        height: kind.route === "accounts" ? 1000 : 844,
+      });
+      await page.screenshot({
+        path: testInfo.outputPath(`simulation-${kind.route}-pending.png`),
+        fullPage: true,
+      });
+      const accepted = page.waitForResponse(
+        (response) =>
+          new URL(response.url()).pathname === kind.path && response.request().method() === "POST",
+      );
+      releasePost?.();
+      const acknowledged = (await (await accepted).json()) as Account | RegionalNetwork;
+      expect(acknowledged).toEqual(returned);
+      expect(acknowledged.name).toBe(kind.name);
+      await expect(page.locator("#notice")).toContainText(`${kind.label} ${acknowledged.id} was created`);
+      await expect(page.locator("#notice")).toContainText("Refresh explicitly");
+      await expect(page.locator("#notice")).toContainText("Do not create it again");
+      await expect(control).toBeEnabled();
+      expect(abortedReads).toBe(1);
+      expect(postCount).toBe(1);
+      const persisted = (await (await request.get("/api/v1/snapshot", { headers })).json()) as Snapshot;
+      expect(persisted.plans).toEqual(before.plans);
+      expect(persisted.operations).toEqual(before.operations);
+      if (kind.route === "accounts") {
+        expect(persisted.accounts.filter((value) => value.name === kind.name)).toEqual([acknowledged]);
+        expect(persisted.accounts).toHaveLength(before.accounts.length + 1);
+        expect(persisted.networks).toEqual(before.networks);
+      } else {
+        expect(persisted.networks.filter((value) => value.name === kind.name)).toEqual([acknowledged]);
+        expect(persisted.networks).toHaveLength(before.networks.length + 1);
+        expect(persisted.accounts).toEqual(before.accounts);
+        recoveredNetwork = acknowledged as RegionalNetwork;
+      }
+      for (const [name, viewport] of [
+        ["desktop", { width: 1440, height: 1000 }],
+        ["mobile", { width: 390, height: 844 }],
+      ] as const) {
+        await page.setViewportSize(viewport);
+        await page.screenshot({
+          path: testInfo.outputPath(`simulation-${kind.route}-acknowledged-${name}.png`),
+          fullPage: true,
+        });
+        expect(await page.evaluate(() => document.documentElement.scrollWidth <= innerWidth)).toBe(true);
+      }
+      const refreshedCreation = page.waitForResponse(
+        (response) => new URL(response.url()).pathname === "/api/v1/snapshot",
+      );
+      await page.getByRole("button", { name: "Refresh", exact: true }).click();
+      expect(await (await refreshedCreation).json()).toEqual(persisted);
+      await expect(page.locator("#notice")).toContainText("Updated.");
+      expect(await page.locator("#network").inputValue()).toBe(selectedNetworkBefore);
+      await expect(page.locator(kind.route === "accounts" ? "#account-list" : "#network-list")).toContainText(
+        kind.name,
+      );
+      expect(postCount).toBe(1);
+      creationEvidence.push({ kind: kind.route, acknowledged, postCount, abortedReads, before, persisted });
+      await page.unroute(`**${kind.path}`, postHandler);
+      await page.unroute("**/api/v1/snapshot", snapshotHandler);
+      if (kind.route === "accounts") {
+        const discoveredCreation = page.waitForResponse(
+          (response) => new URL(response.url()).pathname === `/api/v1/accounts/${acknowledged.id}/discover`,
+        );
+        await page
+          .locator("#account-list li")
+          .filter({ has: page.locator("strong", { hasText: kind.name }) })
+          .getByRole("button", { name: "Discover VPCs", exact: true })
+          .click();
+        recoveredInventory = (await (await discoveredCreation).json()) as Inventory;
+        await expect(page.locator("#notice")).toContainText("Updated.");
+      }
+      await page.getByRole("button", { name: "Sign out", exact: true }).click();
+    }
+    if (!recoveredInventory || !recoveredNetwork) throw new Error("Missing explicit recovered setup");
+    await page.goto("/#/connections");
+    await page
+      .getByLabel("Demo token or OIDC access token")
+      .fill("browser-test-admin-credential-free-local-only");
+    await page.getByRole("button", { name: "Connect", exact: true }).click();
+    await expect(page.locator("#connect")).toBeVisible();
+    await page.locator("#vpc").selectOption(recoveredInventory.vpc_id);
+    await page.getByRole("button", { name: "Configure connection", exact: true }).click();
+    await expect(page.locator("#connection-configure")).toBeVisible();
+    await page.locator("#network").selectOption(recoveredNetwork.id);
+    const recoveredPlanResponse = page.waitForResponse(
+      (response) =>
+        new URL(response.url()).pathname === "/api/v1/plans" && response.request().method() === "POST",
+    );
+    await page.getByRole("button", { name: "Generate immutable change plan", exact: true }).focus();
+    await page.keyboard.press("Enter");
+    const recoveredPlan = (await (await recoveredPlanResponse).json()) as Snapshot["plans"][number];
+    expect(recoveredPlan.request).toEqual({
+      account_id: recoveredInventory.account_id,
+      vpc_id: recoveredInventory.vpc_id,
+      network_id: recoveredNetwork.id,
+      subnet_ids: recoveredInventory.subnets.map((value) => value.id).sort(),
+      allow_application_traffic: false,
+    });
+    await expect(page.locator("#plans")).toBeVisible();
+    expect(
+      JSON.parse((await page.locator("#plan-list article details pre").textContent()) ?? "null"),
+    ).toEqual(recoveredPlan);
+    const afterRecovery = (await (await request.get("/api/v1/snapshot", { headers })).json()) as Snapshot;
+    expect(afterRecovery.plans).toHaveLength(original.plans.length + 1);
+    for (const plan of original.plans)
+      expect(afterRecovery.plans.find((value) => value.id === plan.id)).toEqual(plan);
+    expect(afterRecovery.operations).toEqual(original.operations);
+    const recoveredDownloadEvent = page.waitForEvent("download");
+    await page
+      .locator("#plan-list")
+      .getByRole("button", { name: "Download original plan JSON", exact: true })
+      .click();
+    const recoveredDownload = await recoveredDownloadEvent;
+    expect(recoveredDownload.suggestedFilename()).toBe("navarchnet-plan.json");
+    await recoveredDownload.saveAs(testInfo.outputPath("simulation-recovered-original-plan.json"));
+    expect(
+      JSON.parse(await readFile(testInfo.outputPath("simulation-recovered-original-plan.json"), "utf8")),
+    ).toEqual(recoveredPlan);
+    await writeFile(
+      testInfo.outputPath("simulation-creation-actual-responses.json"),
+      JSON.stringify(
+        {
+          creationEvidence,
+          originalPlans: original.plans,
+          recoveredInventory,
+          recoveredNetwork,
+          recoveredPlan,
+          afterRecovery,
+        },
+        null,
+        2,
+      ),
+    );
+    await page.getByRole("button", { name: "Sign out", exact: true }).click();
+  }
 });
