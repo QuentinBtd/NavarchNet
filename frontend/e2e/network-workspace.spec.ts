@@ -1821,4 +1821,102 @@ test("real API simulation inventory has a scoped network map and read-only inspe
     await expect(page.locator("#connection-scope-context")).toBeEmpty();
     page.off("request", recordScopeCall);
   }
+
+  // Readable audit: actual saved response, explicit existing GET only, after every old oracle.
+  {
+    type NativeAuditRow = { actor: string; event: string; target: string; at: string };
+    const auditHeaders = { Authorization: "Bearer browser-test-reader-credential-free-local-only" };
+    const auditBefore = (await (
+      await request.get("/api/v1/snapshot", { headers: auditHeaders })
+    ).json()) as Snapshot;
+    expect(auditBefore.role).toBe("read_only");
+    await page.goto("/#/diagnostics");
+    // Earlier old lifecycle oracles deliberately leave moved connected nodes; capture a real fresh shell.
+    await page.reload();
+    await page
+      .getByLabel("Demo token or OIDC access token")
+      .fill("browser-test-reader-credential-free-local-only");
+    const auditLogin = page.waitForResponse((r) => new URL(r.url()).pathname === "/api/v1/snapshot");
+    await page.getByRole("button", { name: "Connect", exact: true }).click();
+    expect(await (await auditLogin).json()).toEqual(auditBefore);
+    await expect(page.locator("#diagnostics")).toBeVisible();
+    await expect(page.locator("#diagnostics #plan-list")).toHaveCount(0);
+    const auditCalls: string[] = [];
+    const recordAuditCall = (r: import("@playwright/test").Request) => {
+      if (new URL(r.url()).pathname.startsWith("/api/v1/"))
+        auditCalls.push(`${r.method()} ${new URL(r.url()).pathname}`);
+    };
+    page.on("request", recordAuditCall);
+    const auditResponse = page.waitForResponse((r) => new URL(r.url()).pathname === "/api/v1/audit");
+    await page.getByRole("button", { name: "Load audit trail", exact: true }).focus();
+    await page.keyboard.press("Enter");
+    const returnedAudit = await auditResponse;
+    expect(returnedAudit.ok()).toBe(true);
+    const auditRows = (await returnedAudit.json()) as NativeAuditRow[];
+    expect(Array.isArray(auditRows)).toBe(true);
+    expect(auditRows.length).toBeGreaterThan(6);
+    expect(auditRows.length).toBeLessThanOrEqual(1000);
+    for (const row of auditRows)
+      for (const key of ["actor", "event", "target", "at"] as const) expect(typeof row[key]).toBe("string");
+    const readableAudit = page.getByRole("region", { name: "Returned audit trail", exact: true });
+    await expect(readableAudit).toContainText(`Showing 6 of ${auditRows.length} returned records`);
+    await expect(readableAudit).toContainText("not the database total");
+    await expect(readableAudit).toContainText("not current operation state or connectivity measurements");
+    expect(
+      await readableAudit.locator("[data-audit-index]").evaluateAll((rows) =>
+        rows.map((row) => ({
+          index: Number((row as HTMLElement).dataset.auditIndex),
+          ...Object.fromEntries(
+            ["actor", "event", "target", "at"].map((key) => [
+              key,
+              row.querySelector(`[data-audit-field="${key}"]`)?.textContent,
+            ]),
+          ),
+        })),
+      ),
+    ).toEqual(auditRows.slice(0, 6).map((row, index) => ({ index, ...row })));
+    await expect(readableAudit.locator("a,button,input,select")).toHaveCount(0);
+    await expect(page.locator("#audit-raw-details")).not.toHaveAttribute("open");
+    expect(JSON.parse((await page.locator("#diagnostic-output").textContent()) ?? "null")).toEqual(auditRows);
+    await page.setViewportSize({ width: 1440, height: 1000 });
+    await page.screenshot({ path: testInfo.outputPath("readable-audit-desktop.png"), fullPage: true });
+    await page.setViewportSize({ width: 390, height: 844 });
+    await page.screenshot({ path: testInfo.outputPath("readable-audit-mobile.png"), fullPage: true });
+    expect(await page.evaluate(() => document.documentElement.scrollWidth <= innerWidth)).toBe(true);
+    await page.getByText("Complete returned audit JSON", { exact: true }).click();
+    expect(JSON.parse(await page.locator("#diagnostic-output").innerText())).toEqual(auditRows);
+    const { writeFile } = await import("node:fs/promises");
+    await writeFile(
+      testInfo.outputPath("readable-audit-original-response.json"),
+      JSON.stringify(auditRows, null, 2),
+    );
+    await writeFile(
+      testInfo.outputPath("readable-audit-original-plans.json"),
+      JSON.stringify(auditBefore.plans, null, 2),
+    );
+    expect(await (await request.get("/api/v1/audit", { headers: auditHeaders })).json()).toEqual(auditRows);
+    expect(await (await request.get("/api/v1/snapshot", { headers: auditHeaders })).json()).toEqual(
+      auditBefore,
+    );
+    expect(auditCalls).toEqual(["GET /api/v1/audit"]);
+    const auditRefresh = page.waitForResponse((r) => new URL(r.url()).pathname === "/api/v1/snapshot");
+    await page.getByRole("button", { name: "Refresh", exact: true }).click();
+    expect(await (await auditRefresh).json()).toEqual(auditBefore);
+    await expect(page.locator("#audit-summary")).toBeEmpty();
+    await expect(page.locator("#diagnostic-output")).toBeEmpty();
+    await expect(page.locator("#audit-raw-details")).not.toHaveAttribute("open");
+    expect(auditCalls).toEqual(["GET /api/v1/audit", "GET /api/v1/snapshot"]);
+    const auditReload = page.waitForResponse((r) => new URL(r.url()).pathname === "/api/v1/audit");
+    await page.getByRole("button", { name: "Load audit trail", exact: true }).click();
+    expect(await (await auditReload).json()).toEqual(auditRows);
+    await expect(readableAudit).toBeVisible();
+    await page.getByRole("button", { name: "Sign out", exact: true }).click();
+    await expect(page.locator("#audit-summary")).toBeEmpty();
+    await expect(page.locator("#diagnostic-output")).toBeEmpty();
+    expect(auditCalls).toEqual(["GET /api/v1/audit", "GET /api/v1/snapshot", "GET /api/v1/audit"]);
+    expect(await (await request.get("/api/v1/snapshot", { headers: auditHeaders })).json()).toEqual(
+      auditBefore,
+    );
+    page.off("request", recordAuditCall);
+  }
 });

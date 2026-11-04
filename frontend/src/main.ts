@@ -38,6 +38,7 @@ import { originalPlanForOperation, renderOperationReview } from "./operation-rev
 import { renderOperationStepHistory } from "./operation-step-history";
 import { readPlanReviewIntent } from "./plan-review-link";
 import { recordedOperationForPlan, renderPlanReview } from "./plan-review-view";
+import { renderAuditTrail } from "./readable-audit-trail";
 import { Session } from "./session";
 import { renderObservation, text } from "./view";
 import "./style.css";
@@ -90,6 +91,7 @@ let pendingPlanGeneration: { source: Snapshot; version: number; control: HTMLBut
 let selectedOperationId: string | undefined;
 let operationSearch = { query: "" };
 let operationViewVersion = 0;
+let auditViewVersion = 0;
 let networkWorkspaceVersion = 0;
 let workspaceSelection: { networkId?: string; inventoryKey?: string } = {};
 let workspaceRequestedPlan:
@@ -106,6 +108,7 @@ let workspaceRequestedPlan:
   | undefined;
 const navigation = createNavigation(app, () => {
   session.retireRequests();
+  clearAuditEvidence();
   retirePlanGeneration();
   ++awsViewVersion;
   selectedAwsAccountId = undefined;
@@ -855,6 +858,7 @@ function renderAwsAccounts() {
 async function refresh(canPublish = () => true) {
   const next = await request<Snapshot>("/snapshot");
   if (!canPublish()) return;
+  clearAuditEvidence();
   snapshot = next;
   const planIntent = readPlanReviewIntent(window.location.hash);
   if (planIntent.kind !== "none") selectedPlanId = planIntent.kind === "plan" ? planIntent.id : "";
@@ -925,6 +929,7 @@ element<HTMLFormElement>("login").onsubmit = (event) => {
   void run(refresh);
 };
 function clearSession() {
+  clearAuditEvidence();
   ++networkWorkspaceVersion;
   workspaceSelection = {};
   workspaceRequestedPlan = undefined;
@@ -1108,7 +1113,65 @@ element<HTMLFormElement>("plan-form").onsubmit = (event) => {
     () => version === session.version && snapshot === source,
   );
 };
-element("audit").onclick = () =>
+function clearAuditEvidence() {
+  ++auditViewVersion;
+  element("audit-summary").replaceChildren();
+  element("diagnostic-output").replaceChildren();
+  element("audit-raw-details").removeAttribute("open");
+  const control = element<HTMLButtonElement>("audit");
+  control.disabled = false;
+  delete control.dataset.pending;
+}
+element("audit").onclick = () => {
+  const control = element<HTMLButtonElement>("audit");
+  const workspace = element("diagnostics"),
+    mount = element("audit-summary"),
+    raw = element("diagnostic-output");
+  if (
+    !snapshot ||
+    !["admin", "read_only"].includes(snapshot.role) ||
+    control.disabled ||
+    !control.isConnected ||
+    !workspace.contains(control) ||
+    !workspace.contains(mount) ||
+    workspace.hidden
+  )
+    return;
+  clearAuditEvidence();
+  const version = auditViewVersion,
+    generation = session.version,
+    source = snapshot,
+    role = source.role;
+  const isCurrent = () =>
+    version === auditViewVersion &&
+    generation === session.version &&
+    snapshot === source &&
+    source.role === role &&
+    workspace.isConnected &&
+    workspace === element("diagnostics") &&
+    !workspace.hidden &&
+    control.isConnected &&
+    workspace.contains(control) &&
+    mount.isConnected &&
+    workspace.contains(mount) &&
+    raw.isConnected &&
+    workspace.contains(raw);
+  control.disabled = true;
+  control.dataset.pending = "";
   void run(async () => {
-    element("diagnostic-output").textContent = JSON.stringify(await request("/audit"), null, 2);
-  });
+    try {
+      const value = await request<unknown>("/audit");
+      if (!isCurrent()) return;
+      const original = JSON.stringify(value, null, 2),
+        rendered = renderAuditTrail(value);
+      if (!isCurrent()) return;
+      raw.textContent = original ?? "Response unavailable.";
+      mount.replaceChildren(rendered);
+    } finally {
+      if (isCurrent()) {
+        control.disabled = false;
+        delete control.dataset.pending;
+      }
+    }
+  }, isCurrent);
+};
