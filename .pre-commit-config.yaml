@@ -1,0 +1,19 @@
+# Local hooks only: no unpinned hook repositories or cloud credentials.
+default_install_hook_types: [pre-commit, pre-push]
+repos:
+  - repo: local
+    hooks:
+      - id: navarchnet-fast
+        name: NavarchNet fast local checks
+        entry: mise run fast
+        language: system
+        pass_filenames: false
+        always_run: true
+        stages: [pre-commit]
+      - id: navarchnet-full
+        name: NavarchNet full local pre-push validation
+        entry: mise run full
+        language: system
+        pass_filenames: false
+        always_run: true
+        stages: [pre-push]

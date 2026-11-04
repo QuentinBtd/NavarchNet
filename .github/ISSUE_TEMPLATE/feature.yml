@@ -1,0 +1,14 @@
+name: Feature request
+description: Propose a concrete operator workflow.
+body:
+  - type: textarea
+    id: workflow
+    attributes:
+      label: Operator problem and desired workflow
+    validations:
+      required: true
+  - type: textarea
+    id: acceptance
+    attributes:
+      label: Testable acceptance and safety boundaries
+      description: State provider capabilities, ownership, routing/isolation impact and verification requirements. Do not include credentials.

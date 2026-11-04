@@ -1,0 +1,16 @@
+[workspace]
+members = ["cargo:."]
+
+[dist]
+cargo-dist-version = "0.33.0"
+ci = []
+packages = ["navarchnet"]
+installers = []
+targets = ["x86_64-unknown-linux-gnu", "aarch64-unknown-linux-gnu"]
+checksum = "sha256"
+source-tarball = false
+include = ["LICENSE", "README.md", "docs", "third-party", "frontend/dist", "scripts/navarchnet-start.sh"]
+
+[dist.binaries]
+x86_64-unknown-linux-gnu = ["navarchnet"]
+aarch64-unknown-linux-gnu = ["navarchnet"]

@@ -1,0 +1,22 @@
+name: Bug report
+description: Report a reproducible defect without credentials or private topology.
+body:
+  - type: textarea
+    id: reproduction
+    attributes:
+      label: Reproduction
+      description: Include version/commit, expected behavior, actual behavior and safe reproduction steps.
+    validations:
+      required: true
+  - type: textarea
+    id: evidence
+    attributes:
+      label: Sanitized evidence
+      description: Include operation state and test/provider mode. Remove bearer tokens, database URLs and private account details.
+  - type: checkboxes
+    id: boundary
+    attributes:
+      label: Verification boundary
+      options:
+        - label: I distinguish fake-provider simulation from actual AWS connectivity.
+          required: true

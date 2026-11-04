@@ -1,0 +1,91 @@
+# Primary source and decision ledger
+
+Checked October 19, 2026 during bootstrap. This ledger records implementation decisions, not permission to access AWS or publish. Registry metadata and actual CLI/build outputs were checked before pins. Raw research/validation evidence for the implementation mission is retained outside the checkout at `/root/.hermes/navarchnet-autonomy/`.
+
+| Source | Verified fact / decision |
+| --- | --- |
+| https://docs.rs/axum/0.8.9/axum/ and `cargo info axum@0.8.9` | Current selected Axum API; Rust support compatible with pinned 1.99.0. |
+| https://docs.rs/sqlx/0.9.0/sqlx/ and `cargo info sqlx@0.9.0` | SQLx 0.9.0 requires Rust 1.94+, uses explicit safe/dynamic SQL wrappers; bind parameters used for user values; real migrations/tests executed. |
+| https://docs.rs/tokio/1.53.3/tokio/ and registry metadata | Selected runtime features, no unnecessary full runtime feature set. |
+| https://docs.rs/ts-rs/12.0.1/ts_rs/ | Type declaration generation uses the version's Config API, verified by actual generation/type checking. |
+| https://docs.rs/jsonwebtoken/11.1.0/jsonwebtoken/ | RS256 validation, required issuer/audience/time claims and explicit application roles. Signed positive/negative tests executed. |
+| https://nodejs.org/dist/index.json and https://nodejs.org/dist/v24.22.0/SHASUMS256.txt | Node 24.22.0 LTS binary selected and checksum verified. npm registry metadata verified TypeScript 7.0.2, Vite 8.3.4, Vitest 5.0.5, jsdom 30.1.3, Biome 2.5.15 and Playwright 1.64.1 before pinning. |
+| https://www.apache.org/licenses/LICENSE-2.0.txt | Complete standard text downloaded unmodified as LICENSE. No invented holder. |
+| https://docs.aws.amazon.com/whitepapers/latest/building-scalable-secure-multi-vpc-network-infrastructure/using-nat-gateway-for-centralized-egress.html | Forward/return routing and TGW table separation; same-AZ zonal NAT topology; extra TGW processing means no blanket saving claim. |
+| https://docs.aws.amazon.com/vpc/latest/userguide/vpc-nat-gateway.html and https://docs.aws.amazon.com/vpc/latest/userguide/nat-gateways-regional.html | Public versus private NAT; current regional NAT mode is materially different from zonal NAT, supports TGW return routes and may take up to 60 minutes to expand. ADR 0002 explicitly chooses zonal public NAT first. |
+| https://docs.aws.amazon.com/vpc/latest/tgw/working-with-transit-gateways.html | RAM sharing, owner-versus-consumer API boundaries, shared-subnet ownership and AZ-ID mapping. Live AWS behavior remains unexecuted. |
+| https://docs.aws.amazon.com/sdk-for-rust/latest/dg/credproviders.html | Standard controller chain and SDK temporary sessions; implemented lazily behind opt-in OIDC-only read access, not exercised with ambient/live credentials. Replay fixtures verify AssumeRole, identity, signing credentials and session policy. |
+| https://docs.docker.com/reference/cli/docker/compose/up/ | Current documented `up --no-build --wait --wait-timeout` replaces a runner-rejected `start --wait`; real initial CI failure is retained, not downgraded. |
+| https://fck-nat.dev/configuration/ | Future ENI/EIP identity/HA integration, not a deployed NAT replacement; no throughput or savings invented. |
+| https://axodotdev.github.io/cargo-dist/book/ and https://axodotdev.github.io/cargo-dist/book/reference/config.html | Current default generated workflow builds/hosts/publishes/announces; explicitly use ci=[] and real local builds. Config/workspace/member syntax was verified against current docs and actual 0.33.0 CLI. |
+| https://github.com/axodotdev/cargo-dist/releases/tag/v0.33.0 | Verified selected CLI release and archive checksums. x86_64 SHA-256 4b3f0a5f0ebbdb798f6db649d01b32ba1518376b6f7a0502b7d92b75cc2c8293; ARM64 SHA-256 9c554ab21a58ad46eb9b6710f89633ccb26bc2577cf4b0c2d18a5b826a31913e. |
+| https://release-plz.dev/docs/config | git_only supports publish=false application crates; separate tag/release ownership controls. Evaluated but not enabled; manual version PR selected. |
+| https://docs.github.com/en/actions/how-tos/writing-workflows/choosing-when-your-workflow-runs/triggering-a-workflow | Current GITHUB_TOKEN push/tag suppression and dispatch exceptions; some automated PR runs require approval. Avoid assuming a token-created tag triggers publication. |
+| https://docs.github.com/en/actions/reference/runners/github-hosted-runners | Public native ubuntu-24.04 and ubuntu-24.04-arm runners selected, not an unverified custom host. |
+| https://embarkstudios.github.io/cargo-deny/ and https://github.com/EmbarkStudios/cargo-deny/releases/tag/0.20.2 | CLI selected and SHA-256 9f12ed4c49936e09b48bf862b595cde2fe64fcbd9d74dfacac6131ca824c8d5f verified. Current online docs include an advisory-ignore allow field unsupported by the pinned release; actual CLI rejected it, so only verified id/reason syntax is used. |
+| https://rustsec.org/advisories/RUSTSEC-2023-0071.html | Exact still-unpatched RSA private-key timing advisory; documented public-verification-only/runtime and ephemeral local-test exception. Passing policy is not an absence-of-advisories claim. |
+| Locked upstream `webpki-roots` LICENSE and Lightning CSS LICENSE/package metadata | Preserve CDLA-Permissive-2.0 trust-data text and unmodified MPL-2.0 build-tool notices; original code remains Apache-2.0. |
+
+Official Docker Hub API tag records were read before pinning multi-architecture image-index digests:
+
+- `library/postgres:17.11-bookworm`: sha256:3645570cccdfa447589da9f57dd740faa29b30938e861289a5574b6ca6b03826
+- `library/rust:1.99.0-slim-bookworm`: sha256:2c3a22f0a5533ea2dd5a16627bc841228151faa2d4de2644ac9987e4a2f1f2fa
+- `library/node:24.22.0-bookworm-slim`: sha256:a5f4366e834695d5f363b920c104953a535d3a9864d1bdf74566a0ebe01daee5
+- `library/debian:bookworm-slim`: sha256:7c7b2c966bc9ee8cedfeef67e0e279108992c77681fa595db4a9d65c06ccc587
+
+GitHub action tag refs were resolved from their actual primary repositories with `git ls-remote` before copying full SHAs into CI: checkout v6, setup-node v6, rust-cache v2 and upload-artifact v4. No mutable action tag is used in the workflow.
+
+## NAT metadata preservation — October 20, 2026
+
+Rechecked https://docs.aws.amazon.com/AWSEC2/latest/APIReference/API_NatGateway.html, https://docs.aws.amazon.com/AWSEC2/latest/APIReference/API_NatGatewayAddress.html and the regional NAT guide. Original bodies/hashes are retained in `persistent-migration/nat-observation-primary-sources.json`. Cached pinned aws-sdk-ec2 1.268.0 `protocol_serde/shape_nat_gateway.rs` and `shape_nat_gateway_address.rs` confirm literal XML names `routeTableId`, `natGatewayAddressSet`, `availabilityZone`, `availabilityZoneId`, `isPrimary`, `status`, allocation/association/interface and public/private IP fields; this is source inspection, not compiling that generated EC2 crate or live AWS acceptance. The API says `available` does not indicate NAT health. Its `routeTableId` prose says NAT gateway ID, whereas the regional guide describes its own route table: preserve the literal optional field and do not silently repair an identifier, validate a relationship or infer an IGW/return route. Address status/AZ/primary metadata is not observed packet egress or a selected flow AZ. Missing collections/fields and legacy snapshots retain unknown evidence; empty and missing are distinct.
+
+## Target attachment subnet entries — October 20, 2026
+
+Current official https://docs.aws.amazon.com/vpc/latest/tgw/how-transit-gateways-work.html and https://docs.aws.amazon.com/vpc/latest/tgw/tgw-vpc-attachments.html document target-subnet placement, cross-AZ routing and appliance/flow-dependent behavior. Existing typed snapshots do not capture appliance mode, so target diagnostics report all declared subnet entries with selection not inferred rather than choosing a target AZ. https://docs.aws.amazon.com/vpc/latest/userguide/nat-gateways-regional.html documents standalone regional NAT with its own route table and no required public hosting subnet. Do not apply a zonal-NAT public-subnet/IGW chain to a regional or unknown mode. All three original body/hash captures are retained in `persistent-migration/target-handoff-primary-sources.json`; they are documentary evidence, not cloud/API/data-plane acceptance.
+
+## Source-subnet to TGW ingress candidate — October 20, 2026
+
+Official https://docs.aws.amazon.com/vpc/latest/tgw/tgw-vpc-attachments.html and https://docs.aws.amazon.com/AWSEC2/latest/APIReference/API_TransitGatewayVpcAttachment.html were rechecked and retained in `persistent-migration/source-handoff-primary-sources.json`. Attachments declare VPC ownership, gateway and subnet references; AZ attachment presence is necessary but not sufficient for routing, attachment-subnet route tables and return paths remain separate, and IPv6-only attachment subnets are unsupported. The offline composition therefore reports only an AZ-matched ingress candidate over independent saved observations, never proven forwarding. Standard AZ IDs are compared without translating account-specific names or Local Zone parents. Actual XML names `subnetIds`, `vpcOwnerId` and `transitGatewayId` were cross-checked against cached pinned aws-sdk-ec2 1.268.0 `protocol_serde/shape_transit_gateway_vpc_attachment.rs`; that source inspection is not a successful generated EC2 build or live API acceptance.
+
+## VPC saved-subnet route lookup — October 20, 2026
+
+Rechecked the following official pages through the browser. These are interpretation rules for stored observations, not live AWS acceptance. Captures/decisions are retained in the mission's `persistent-migration/vpc-route-primary-sources.json`.
+
+| Primary source | Checked decision / boundary |
+| --- | --- |
+| https://docs.aws.amazon.com/vpc/latest/userguide/route-tables-priority.html | Separate IPv4/IPv6 longest-prefix matching; static routes beat VGW-propagated routes at identical destinations. Prefix-list members can be more specific and overlapping prefix lists can have provider-chosen priority; without members this lookup returns unresolved. No BGP tie-break is invented. |
+| https://docs.aws.amazon.com/vpc/latest/userguide/subnet-route-tables.html | Explicit subnet versus implicit main selection, more-specific routing and AWS-reserved service ranges 169.254.168.0/22 and fd00:ec2::/32. An overlapping broader route does not forward those service destinations, so they are not presented as ordinary default egress. |
+| https://docs.aws.amazon.com/AWSEC2/latest/APIReference/API_Route.html | Optional CIDR/prefix-list, origin/state and target fields. The prose mentions VPC Route Server Advertisement although its displayed origin value list omits it; unknown/unsupported origins are deliberately unresolved, never assumed static. A reported active target is not independent target-health or connectivity evidence. |
+
+## TGW route-content and offline lookup continuation — October 20, 2026
+
+Ingress continuation rechecked the official `how-transit-gateways-work.html` route-table association section, `API_GetTransitGatewayRouteTableAssociations.html`, `API_TransitGatewayRouteTableAssociation.html`, and `API_TransitGatewayVpcAttachment.html` on October 20, 2026. An attachment associates with one table but can propagate to several; the typed association includes optional attachment/resource/type/state fields. VPC attachments separately report their gateway, VPC, VPC owner and lifecycle state. The new offline ingress lookup requires unambiguous ready reported associations, supports different VPC/gateway owners without treating sharing as ownership, and refuses missing evidence rather than inventing defaults. These are source semantics and credential-free fixture checks, not executed AWS acceptance. Primary page captures are retained in the task's `persistent-migration/ingress-primary-sources.json`.
+
+| Primary source | Checked decision / boundary |
+| --- | --- |
+| https://docs.aws.amazon.com/AWSEC2/latest/APIReference/API_SearchTransitGatewayRoutes.html | Required type filter, bounded MaxResults, NextToken and explicit additionalRoutesAvailable response. The adapter checks both continuation and completion; it never treats a truncated or unknown response as complete. Local protocol fixtures, not live API acceptance. |
+| https://docs.aws.amazon.com/AWSEC2/latest/APIReference/API_TransitGatewayRoute.html and pinned aws-sdk-ec2 1.268.0 protocol_serde/shape_transit_gateway_route.rs | Preserve destination/prefix-list/state/type/announcement and nested attachment fields. Validate CIDRs and budgets without translating unknown states into readiness. SDK source was inspected, not compiled as a successful full EC2 probe. |
+| https://docs.aws.amazon.com/vpc/latest/tgw/how-transit-gateways-work.html | Longest prefix first; static takes precedence over propagated for the same CIDR. A conservative per-table saved-observation lookup refuses unresolved prefix lists and competing/unknown evidence rather than inventing BGP, attachment readiness, hidden backup selection, full routing or measured reachability. |
+
+## Local-first and AWS read-only continuation — October 19, 2026
+
+| Primary source | Checked decision / boundary |
+| --- | --- |
+| https://mise.jdx.dev/configuration.html and https://mise.jdx.dev/tasks/ | Exact `.mise.toml`, exact Rust/Node/prek/actionlint versions and one shared set of local/opt-in CI tasks. Installed tool linking and actual task/hook execution were verified, not inferred from configuration. |
+| https://prek.j178.dev/ and https://github.com/j178/prek/releases/tag/v0.5.6 | Selected prek 0.5.6; actual CLI uses `--stage`, validates the configuration and installs/runs pre-commit and full pre-push hooks locally. |
+| https://github.com/jdx/mise-action/tree/fc42bcc7ddbf51124c30f95a877a0c5168a3bfde | Selected pinned action/config inputs, explicit mise version, GitHub token persistence disabled. Manual-only workflow policy is locally tested; no new Actions run qualifies this continuation. |
+| https://docs.rs/aws-config/1.12.0/aws_config/sts/struct.AssumeRoleProvider.html and https://docs.rs/aws-sdk-sts/1.119.0/aws_sdk_sts/ | Official SDK typed AssumeRole, ExternalId/session-name/session-policy configuration and GetCallerIdentity. Exact APIs were checked against downloaded source and replayed requests. No live credential-chain or IAM evaluation claim. |
+| https://docs.rs/aws-sdk-ram/1.116.0/aws_sdk_ram/ | Official typed sharing/resource/principal/invitation reads, both ownership contexts and paginated fixtures. TGW resource/principal filters do not classify every share/invitation as a TGW. |
+| https://docs.rs/aws-sigv4/1.6.0/aws_sigv4/ and https://docs.aws.amazon.com/AWSEC2/latest/APIReference/Query-Requests.html | Signed EC2 Query adapter with temporary token headers; generated EC2 compile probe was deliberately stopped for resource pressure. See ADR 0004; not a generated EC2-client success or an OOM claim. |
+| https://docs.aws.amazon.com/service-authorization/latest/reference/list_ec2.html and https://docs.aws.amazon.com/service-authorization/latest/reference/list_ram.html | Current canonical references: the 9 selected EC2 Describe and 4 RAM read/list actions have empty resource-type columns. Saved HTML was parsed and all 13 names matched; use exact actions/region constraints and Resource `*`, not wildcard actions. Older long service slugs returned a generic reference redirect and were not treated as usable action tables. |
+| https://docs.aws.amazon.com/IAM/latest/UserGuide/reference_policies_condition-keys.html#condition-keys-requestedregion | `aws:RequestedRegion` is an endpoint-region condition, not a guarantee against every service's cross-region effects. Applied to the exact read-only action set. |
+| https://docs.aws.amazon.com/IAM/latest/UserGuide/reference_policies_elements_notaction.html | Explicit Deny with NotAction excludes the named read/identity actions; separate allow and wrong-region-deny statements are sent in the inline session policy. Local tests inspect serialized policy shape; no live IAM evaluation was run. |
+| https://docs.aws.amazon.com/STS/latest/APIReference/API_GetCallerIdentity.html | AWS documents identity retrieval as requiring no permissions. Account/assumed-role identity and temporary signing headers are verified in fixtures, not in a real account. |
+
+Current local source evidence is separate from the historical remote fake-only CI/archives. Public/private provider-reported IP addresses and available resource states are observations, not active egress/isolation measurements. No AWS resource, invitation acceptance, release or package publication occurred.
+
+## Observed subnet associations and optional Floci — October 19, 2026
+
+- https://docs.aws.amazon.com/vpc/latest/userguide/subnet-route-tables.html and https://docs.aws.amazon.com/AWSEC2/latest/APIReference/API_RouteTableAssociation.html: explicit subnet associations versus implicit main table, absent implicit subnet IDs and optional association state. The implementation selects reported configuration conservatively, keeps missing/transitioning state unresolved, and does not infer a verified packet path.
+- https://github.com/floci-io/floci/tree/ee15f502bfc017861b67b076b82e1ccd032c7129: pinned release 2.3.0 source and OCI source-revision label verified. Exact dispatch inventory and gaps, stale TGW documentation, actual native startup/retirement and the unexecuted provider-compatibility boundary are recorded in [Floci evaluation](floci-evaluation.md). This does not replace deterministic faults or real AWS multi-account/two-AZ acceptance.
+- https://docs.aws.amazon.com/AWSEC2/latest/APIReference/API_GetTransitGatewayRouteTableAssociations.html and https://docs.aws.amazon.com/AWSEC2/latest/APIReference/API_GetTransitGatewayRouteTablePropagations.html: exact required table ID, response collection names, continuation tokens and MaxResults range checked from primary Markdown. Typed association/propagation fields preserve unknown types and transitional states. These two exact read actions were added to the bounded inline session policy; no route-content or live IAM qualification is implied. The current primary service-authorization table also has empty resource-type columns for these actions.
